@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 ulid = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+chrono = { version = "0.4", features = ["clock"] }
