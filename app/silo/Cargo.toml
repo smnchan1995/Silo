@@ -3,6 +3,8 @@ name = "silo"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "silo"

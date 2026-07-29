@@ -13,6 +13,8 @@ members = [
 edition = "2021"
 version = "0.1.0"
 license = "MIT"
+description = "A fast, local-first, keyboard-driven notes app for macOS, built in Rust on GPUI."
+repository = "https://github.com/smnchan1995/Silo"
 
 [workspace.dependencies]
 anyhow = "1"
