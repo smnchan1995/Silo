@@ -1,0 +1,15 @@
+[package]
+name = "silo-ui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+silo-core = { path = "../silo-core" }
+silo-vault = { path = "../silo-vault" }
+gpui = { workspace = true }
+# font-kit enables text rendering in the macOS platform layer (gpui_macos).
+# gpui_platform's default features are empty and gpui's font-kit does not
+# forward across the crate split, so enable it explicitly here.
+gpui_platform = { workspace = true, features = ["font-kit"] }
+anyhow = { workspace = true }

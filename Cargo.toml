@@ -5,9 +5,8 @@ members = [
     "crates/silo-vault",
     "crates/silo-index",
     "crates/silo-markdown",
-    # Added when Xcode is available (GPUI needs the Metal toolchain):
-    # "crates/silo-ui",
-    # "app/silo",
+    "crates/silo-ui",
+    "app/silo",
 ]
 
 [workspace.package]
@@ -26,6 +25,13 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 tempfile = "3"
 insta = "1"
-# GPUI has no crates.io release. Pin to a specific Zed revision and record it in
-# CLAUDE.md. Uncommented + wired into silo-ui once Xcode is installed.
-# gpui = { git = "https://github.com/zed-industries/zed", rev = "<REV>" }
+# GPUI has no crates.io release. Pinned to a specific Zed revision (recorded in
+# CLAUDE.md). GPUI's API is not semver-stable; reconcile against this rev's examples.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "82aef44308540b576e4e51fb379efa71614e5c91" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "82aef44308540b576e4e51fb379efa71614e5c91" }
+
+# GPUI's async executor pulls Zed's forks of these; replicate the relevant
+# [patch.crates-io] entries from Zed's workspace so the git dependency resolves.
+[patch.crates-io]
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }

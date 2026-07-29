@@ -1,0 +1,14 @@
+[package]
+name = "silo"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "silo"
+path = "src/main.rs"
+
+[dependencies]
+silo-ui = { path = "../../crates/silo-ui" }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
