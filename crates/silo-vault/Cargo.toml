@@ -1,0 +1,15 @@
+[package]
+name = "silo-vault"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+silo-core = { path = "../silo-core" }
+silo-markdown = { path = "../silo-markdown" }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

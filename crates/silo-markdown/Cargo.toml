@@ -1,0 +1,9 @@
+[package]
+name = "silo-markdown"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# NOTE: pulldown-cmark will be added when we render markdown to a block tree
+# (UI milestone). The current functions are pure string parsing with no deps.
+[dependencies]

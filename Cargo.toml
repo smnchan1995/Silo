@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/silo-core",
+    "crates/silo-vault",
+    "crates/silo-index",
+    "crates/silo-markdown",
+    # Added when Xcode is available (GPUI needs the Metal toolchain):
+    # "crates/silo-ui",
+    # "app/silo",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+pulldown-cmark = "0.12"
+ulid = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tempfile = "3"
+insta = "1"
+# GPUI has no crates.io release. Pin to a specific Zed revision and record it in
+# CLAUDE.md. Uncommented + wired into silo-ui once Xcode is installed.
+# gpui = { git = "https://github.com/zed-industries/zed", rev = "<REV>" }
