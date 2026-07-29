@@ -92,6 +92,51 @@ pub fn write_note(note: &Note) -> Result<(), VaultError> {
     Ok(())
 }
 
+/// Turn a title into a filesystem-safe slug (alphanumerics, `-` for the rest).
+fn slug(title: &str) -> String {
+    let s: String = title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() {
+        "untitled".into()
+    } else {
+        s
+    }
+}
+
+/// Create a new note in `dir` with the given title, write it, and return it.
+pub fn create_note(dir: &Path, title: &str) -> Result<Note, VaultError> {
+    let id = NoteId::new();
+    let now = now_rfc3339();
+    let mut path = dir.join(format!("{}.md", slug(title)));
+    if path.exists() {
+        path = dir.join(format!("{}-{}.md", slug(title), id));
+    }
+    let note = Note {
+        id,
+        path,
+        title: title.to_string(),
+        frontmatter: Frontmatter {
+            id,
+            created: now.clone(),
+            updated: now,
+            tags: vec![],
+            pinned: false,
+        },
+        body: format!("# {title}\n"),
+    };
+    write_note(&note)?;
+    Ok(note)
+}
+
 /// Recursively walk a folder into a `Notebook` tree. `.md` files become notes;
 /// dotfiles and the `.silo` directory are skipped.
 pub fn walk_vault(root: &Path) -> Result<Notebook, VaultError> {
@@ -202,6 +247,16 @@ mod tests {
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn create_note_writes_and_is_readable() {
+        let dir = tempdir().unwrap();
+        let note = create_note(dir.path(), "My First Note").unwrap();
+        assert_eq!(note.title, "My First Note");
+        let reread = read_note(&note.path).unwrap();
+        assert_eq!(reread.id, note.id);
+        assert!(reread.body.contains("My First Note"));
     }
 
     #[test]
