@@ -1,10 +1,52 @@
+use crate::editor::NoteEditor;
 use crate::theme::Theme;
+use gpui::{Context, Entity, Subscription, Task};
 use silo_core::{Note, NoteId, Notebook};
+use std::time::Duration;
 
 pub struct AppState {
     pub vault: Notebook,
     pub selected: Option<NoteId>,
     pub theme: Theme,
+    /// The body editor for the selected note. `None` in unit tests (no GPUI app).
+    pub editor: Option<Entity<NoteEditor>>,
+    /// Pending debounced autosave; replacing it cancels the previous timer.
+    pub save_task: Option<Task<()>>,
+    /// Keeps the editor edit-event subscription alive.
+    pub _save_sub: Option<Subscription>,
+}
+
+impl AppState {
+    /// Debounce a save ~500ms after the last edit.
+    pub fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            this.update(cx, |st, cx| st.save_now(cx)).ok();
+        }));
+    }
+
+    /// Write the editor's current text to the selected note's file.
+    fn save_now(&mut self, cx: &mut Context<Self>) {
+        let Some(ed) = self.editor.clone() else {
+            return;
+        };
+        let text = ed.read(cx).text();
+        let Some(note) = self.selected_note() else {
+            return;
+        };
+        let updated = Note {
+            id: note.id,
+            path: note.path.clone(),
+            title: note.title.clone(), // not persisted; derived on read
+            frontmatter: note.frontmatter.clone(),
+            body: text,
+        };
+        if let Err(e) = silo_vault::write_note(&updated) {
+            eprintln!("autosave failed for {}: {e}", updated.path.display());
+        }
+    }
 }
 
 impl AppState {
@@ -69,6 +111,9 @@ mod tests {
             vault: root,
             selected: None,
             theme: Theme::light(),
+            editor: None,
+            save_task: None,
+            _save_sub: None,
         };
         let titles: Vec<_> = st.flat_notes().iter().map(|n| n.title.clone()).collect();
         assert!(titles.contains(&"A".to_string()) && titles.contains(&"B".to_string()));
@@ -88,6 +133,9 @@ mod tests {
             vault: root,
             selected: Some(id),
             theme: Theme::light(),
+            editor: None,
+            save_task: None,
+            _save_sub: None,
         };
         assert_eq!(st.selected_note().unwrap().title, "A");
     }

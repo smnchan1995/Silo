@@ -4756,6 +4756,7 @@ dependencies = [
  "gpui_platform",
  "silo-core",
  "silo-vault",
+ "unicode-segmentation",
 ]
 
 [[package]]
