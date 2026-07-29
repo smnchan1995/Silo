@@ -1,7 +1,8 @@
 use serde::Deserialize;
-use silo_core::{Frontmatter, Note, NoteId, Notebook};
+use silo_core::{now_rfc3339, Frontmatter, Note, NoteId, Notebook};
 use silo_markdown::{derive_title, split_frontmatter};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -11,6 +12,8 @@ pub enum VaultError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("serialize error for {path}: {msg}")]
+    Serialize { path: PathBuf, msg: String },
 }
 
 /// Raw YAML shape; every field optional so malformed/partial frontmatter degrades gracefully.
@@ -21,17 +24,6 @@ struct RawFm {
     updated: Option<String>,
     tags: Option<Vec<String>>,
     pinned: Option<bool>,
-}
-
-/// Minimal RFC3339-ish UTC timestamp without a chrono dependency.
-/// The M2 (Edit & Save) plan replaces this with a real `chrono` timestamp.
-fn now_rfc3339() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    format!("1970-01-01T00:00:{secs}Z")
 }
 
 /// Parse a single `.md` file into a `Note`. Never panics on bad frontmatter —
@@ -69,6 +61,35 @@ pub fn read_note(path: &Path) -> Result<Note, VaultError> {
         frontmatter,
         body: body.to_string(),
     })
+}
+
+/// Write a note to its `.md` path atomically (temp file in the same directory,
+/// then rename). Serializes the frontmatter as a leading YAML block and stamps
+/// `updated` to now. `id` and `created` are preserved from the note.
+pub fn write_note(note: &Note) -> Result<(), VaultError> {
+    let mut fm = note.frontmatter.clone();
+    fm.updated = now_rfc3339();
+    let yaml = fm.to_yaml().map_err(|e| VaultError::Serialize {
+        path: note.path.clone(),
+        msg: e.to_string(),
+    })?;
+    let contents = format!("---\n{yaml}---\n{}", note.body);
+
+    let dir = note.path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|source| VaultError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    tmp.write_all(contents.as_bytes())
+        .map_err(|source| VaultError::Io {
+            path: note.path.clone(),
+            source,
+        })?;
+    tmp.persist(&note.path).map_err(|e| VaultError::Io {
+        path: note.path.clone(),
+        source: e.error,
+    })?;
+    Ok(())
 }
 
 /// Recursively walk a folder into a `Notebook` tree. `.md` files become notes;
@@ -151,6 +172,36 @@ mod tests {
         let note = read_note(&p).unwrap();
         assert_eq!(note.title, "Just A Note");
         assert!(!note.frontmatter.created.is_empty());
+    }
+
+    #[test]
+    fn write_then_read_roundtrips_frontmatter_and_body() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        fs::write(&p, "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ncreated: 2026-01-01T00:00:00+00:00\nupdated: 2026-01-01T00:00:00+00:00\ntags: [x]\npinned: false\n---\n# Title\nbody").unwrap();
+        let mut note = read_note(&p).unwrap();
+        note.body = "# Title\nedited body".into();
+        write_note(&note).unwrap();
+        let reread = read_note(&p).unwrap();
+        assert_eq!(reread.id, note.id); // id preserved
+        assert_eq!(reread.frontmatter.created, note.frontmatter.created); // created preserved
+        assert!(reread.body.contains("edited body")); // body persisted
+    }
+
+    #[test]
+    fn write_is_atomic_no_leftover_temp() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("a.md");
+        fs::write(&p, "# A\n").unwrap();
+        let note = read_note(&p).unwrap();
+        write_note(&note).unwrap();
+        // exactly one .md file remains; NamedTempFile leaves no leftover on success
+        let count = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+            .count();
+        assert_eq!(count, 1);
     }
 
     #[test]

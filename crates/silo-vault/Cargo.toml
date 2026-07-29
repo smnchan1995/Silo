@@ -10,6 +10,4 @@ silo-markdown = { path = "../silo-markdown" }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }
