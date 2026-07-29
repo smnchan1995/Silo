@@ -3,5 +3,79 @@
     "superpowers@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
     "rust-analyzer-lsp@claude-plugins-official": true
-  }
+  },
+  "permissions": {
+    "allow": [
+      "Read(~/Documents/GitHub/Silo/**)"
+    ],
+    "deny": [
+      "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.config/gh/**)",
+      "Read(~/.config/gcloud/**)", "Read(~/.azure/**)", "Read(~/.kube/**)",
+      "Read(~/.gnupg/**)", "Read(~/.docker/config.json)",
+      "Read(~/.netrc)", "Read(~/.git-credentials)", "Read(~/.pgpass)",
+      "Read(~/.my.cnf)", "Read(~/.npmrc)", "Read(~/.pypirc)",
+      "Read(~/.vault-token)", "Read(~/.password-store/**)",
+      "Read(~/.claude.json)", "Read(~/.claude/.credentials.json)",
+      "Read(**/.env)", "Read(**/.env.*)",
+      "Read(**/*.pem)", "Read(**/*.key)", "Read(**/*.p12)",
+      "Read(**/*.jks)", "Read(**/*.keystore)", "Read(**/*.tfstate*)",
+      "Read(~/.bash_history)", "Read(~/.zsh_history)",
+      "Read(~/Library/Keychains/**)", "Read(~/.local/share/keyrings/**)",
+      "Read(~/Library/Application Support/Google/Chrome/**)",
+      "Read(~/Library/Application Support/Firefox/**)",
+      "Read(~/.config/google-chrome/**)", "Read(~/.mozilla/**)",
+      "Read(~/Dropbox/**)", "Read(~/OneDrive/**)",
+      "Read(~/Library/Mobile Documents/**)",
+      "Bash(security find-generic-password *)",
+      "Bash(security find-internet-password *)",
+      "Bash(secret-tool *)",
+      "mcp__*"
+    ],
+    "ask": [
+      "Bash(env)", "Bash(env *)", "Bash(printenv *)", "Bash(set)",
+      "Bash(export *)", "Bash(echo *$*)", "Bash(declare -x*)",
+      "Bash(git push *)", "Bash(git remote *)", "Bash(git config *)",
+      "Bash(gh *)", "Bash(glab *)",
+      "Bash(curl *)", "Bash(wget *)", "Bash(nc *)", "Bash(ncat *)",
+      "Bash(scp *)", "Bash(rsync *)", "Bash(sftp *)", "Bash(ssh *)",
+      "Bash(npm publish *)", "Bash(npm login *)", "Bash(yarn publish *)",
+      "Bash(pnpm publish *)", "Bash(twine *)", "Bash(cargo publish *)",
+      "Bash(gem push *)",
+      "Bash(docker push *)", "Bash(docker login *)",
+      "Bash(aws *)", "Bash(gcloud *)", "Bash(az *)",
+      "Bash(kubectl *)", "Bash(terraform *)", "Bash(helm *)",
+      "WebFetch(domain:*)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": [
+        "~/.ssh/", "~/.aws/", "~/.config/gh/", "~/.config/gcloud/",
+        "~/.kube/", "~/.gnupg/", "~/.docker/", "~/.netrc",
+        "~/.git-credentials", "~/.password-store/", "~/.claude.json",
+        "~/.bash_history", "~/.zsh_history",
+        "~/Documents/", "~/Library/Keychains/"
+      ],
+      "allowRead": ["."]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com", "api.github.com", "registry.npmjs.org",
+        "pypi.org", "files.pythonhosted.org",
+        "crates.io", "static.crates.io", "index.crates.io"
+      ],
+      "deniedDomains": ["169.254.169.254", "metadata.google.internal"]
+    }
+  },
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true,
+  "allowedMcpServers": [],
+  "strictKnownMarketplaces": [],
+  "disableSideloadFlags": true,
+  "sandbox.network.allowManagedDomainsOnly": true,
+  "sandbox.filesystem.allowManagedReadPathsOnly": true
 }
