@@ -1,3 +1,6 @@
+mod config;
+pub use config::{config_path, load_config, save_config, AppConfig};
+
 use serde::Deserialize;
 use silo_core::{now_rfc3339, Frontmatter, Note, NoteId, Notebook};
 use silo_markdown::{derive_title, split_frontmatter};

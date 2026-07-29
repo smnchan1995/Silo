@@ -9,5 +9,7 @@ silo-core = { path = "../silo-core" }
 silo-markdown = { path = "../silo-markdown" }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+serde_json = "1"
+directories = "5"
 thiserror = { workspace = true }
 tempfile = { workspace = true }
