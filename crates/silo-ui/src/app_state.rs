@@ -90,12 +90,26 @@ impl AppState {
                 let current = self.editor.as_ref().map(|ed| ed.read(cx).text());
                 let dirty = current.as_deref() != self.saved_text.as_deref();
                 if !dirty {
+                    // no unsaved edits: adopt the on-disk version
                     if let Some(ed) = self.editor.clone() {
                         ed.update(cx, |e, cx| e.set_content(&new_body, cx));
                     }
                     self.saved_text = Some(new_body);
+                } else if let Ok(disk) = std::fs::read_to_string(&note_path) {
+                    // unsaved edits + external change: preserve both. Keep our
+                    // edits (autosave persists them to the original); write the
+                    // incoming disk version to a conflict sibling.
+                    let stamp = silo_core::now_rfc3339().replace(':', "-");
+                    let cp = silo_vault::conflict_path(&note_path, &stamp);
+                    if let Err(e) = silo_vault::write_raw(&cp, &disk) {
+                        eprintln!("failed to write conflict file {}: {e}", cp.display());
+                    } else {
+                        eprintln!(
+                            "external change while editing; preserved incoming version at {}",
+                            cp.display()
+                        );
+                    }
                 }
-                // dirty case (conflict) handled in Task 4
             }
         }
         cx.notify();

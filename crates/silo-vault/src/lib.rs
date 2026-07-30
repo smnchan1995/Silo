@@ -140,6 +140,36 @@ pub fn create_note(dir: &Path, title: &str) -> Result<Note, VaultError> {
     Ok(note)
 }
 
+/// Sibling path for preserving a conflicting version, e.g.
+/// `inbox.md` + `2026-...` → `inbox.conflict-2026-....md`.
+pub fn conflict_path(original: &Path, stamp: &str) -> PathBuf {
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("note");
+    original.with_file_name(format!("{stem}.conflict-{stamp}.md"))
+}
+
+/// Atomically write raw bytes to `path` (used for conflict files, which already
+/// carry their own frontmatter from disk).
+pub fn write_raw(path: &Path, contents: &str) -> Result<(), VaultError> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|source| VaultError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    tmp.write_all(contents.as_bytes())
+        .map_err(|source| VaultError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    tmp.persist(path).map_err(|e| VaultError::Io {
+        path: path.to_path_buf(),
+        source: e.error,
+    })?;
+    Ok(())
+}
+
 /// Watch a vault recursively for changes. Returns a channel that yields batches
 /// of changed `.md` paths. The watcher runs on its own thread that lives for the
 /// life of the app (until the receiver is dropped).
@@ -285,6 +315,23 @@ mod tests {
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn conflict_path_inserts_marker() {
+        let p = conflict_path(Path::new("/x/inbox.md"), "2026-07-29T23-47-34Z");
+        assert_eq!(
+            p,
+            PathBuf::from("/x/inbox.conflict-2026-07-29T23-47-34Z.md")
+        );
+    }
+
+    #[test]
+    fn write_raw_writes_contents() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("c.md");
+        write_raw(&p, "hello").unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "hello");
     }
 
     #[test]
