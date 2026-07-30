@@ -252,7 +252,57 @@ fn sidebar(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoEle
         )
 }
 
-fn content_pane(t: &Theme, st: &AppState) -> impl IntoElement {
+/// Outgoing `[[link]]` chips + "Linked mentions" for the selected note.
+fn links_panel(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
+    let mut chips = div().flex().flex_wrap().gap(px(6.0));
+    for (title, id) in st.outgoing_links() {
+        let follow = title.clone();
+        chips = chips.child(
+            div()
+                .px(px(8.0))
+                .py(px(3.0))
+                .border_1()
+                .border_color(t.divider)
+                .cursor(CursorStyle::PointingHand)
+                .text_xs()
+                .text_color(if id.is_some() { t.accent } else { t.faint })
+                .child(format!("[[{title}]]"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |st, _e, w, cx| st.follow_link(follow.clone(), w, cx)),
+                ),
+        );
+    }
+    let mut mentions = div().flex().flex_col().gap(px(2.0));
+    for b in st.backlinks_of_selected() {
+        let id = b.from_id;
+        mentions = mentions.child(
+            div()
+                .text_sm()
+                .text_color(t.text)
+                .cursor(CursorStyle::PointingHand)
+                .child(b.from_title.clone())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |st, _e, w, cx| st.open_note(id, w, cx)),
+                ),
+        );
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .pt(px(14.0))
+        .pb(px(18.0))
+        .border_t_1()
+        .border_color(t.divider)
+        .child(label(t, "Links"))
+        .child(chips)
+        .child(div().pt(px(8.0)).child(label(t, "Linked mentions")))
+        .child(mentions)
+}
+
+fn content_pane(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoElement {
     let pane = div()
         .flex()
         .flex_col()
@@ -261,8 +311,9 @@ fn content_pane(t: &Theme, st: &AppState) -> impl IntoElement {
         .bg(t.bg)
         .px(px(40.0))
         .pt(px(28.0));
-    match (st.selected_note(), st.editor.clone()) {
-        (Some(note), Some(ed)) => {
+    match (st.selected_note().is_some(), st.editor.clone()) {
+        (true, Some(ed)) => {
+            let note = st.selected_note().unwrap();
             let dir = note
                 .path
                 .parent()
@@ -279,6 +330,7 @@ fn content_pane(t: &Theme, st: &AppState) -> impl IntoElement {
                     .child(crumb),
             )
             .child(div().flex_1().child(ed))
+            .child(links_panel(t, st, cx))
         }
         _ => pane
             .items_center()
@@ -435,7 +487,7 @@ impl Render for AppState {
                     .flex_1()
                     .overflow_hidden()
                     .child(sidebar(&t, self, cx))
-                    .child(content_pane(&t, self))
+                    .child(content_pane(&t, self, cx))
                     .child(day_rail(&t)),
             )
             .child(footer_bar(&t, word_count))

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 silo-core = { path = "../silo-core" }
+silo-markdown = { path = "../silo-markdown" }
 silo-vault = { path = "../silo-vault" }
 silo-index = { path = "../silo-index" }
 gpui = { workspace = true }

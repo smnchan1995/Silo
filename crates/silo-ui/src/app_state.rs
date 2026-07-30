@@ -62,6 +62,54 @@ impl AppState {
         cx.notify();
     }
 
+    /// The `[[titles]]` in the selected note's body, each resolved to an id if it exists.
+    pub fn outgoing_links(&self) -> Vec<(String, Option<NoteId>)> {
+        let Some(note) = self.selected_note() else {
+            return vec![];
+        };
+        let idx = self.index.as_ref();
+        silo_markdown::extract_links(&note.body)
+            .into_iter()
+            .map(|title| {
+                let id = idx.and_then(|i| i.resolve_title(&title).ok().flatten());
+                (title, id)
+            })
+            .collect()
+    }
+
+    /// Notes that link to the selected note ("Linked mentions").
+    pub fn backlinks_of_selected(&self) -> Vec<silo_index::Backlink> {
+        match (self.selected, self.index.as_ref()) {
+            (Some(id), Some(idx)) => idx.backlinks(id).unwrap_or_default(),
+            _ => vec![],
+        }
+    }
+
+    /// Open the linked note, creating it (titled `title`) if it doesn't exist.
+    pub fn follow_link(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
+        let existing = self
+            .index
+            .as_ref()
+            .and_then(|i| i.resolve_title(&title).ok().flatten());
+        match existing {
+            Some(id) => self.open_note(id, window, cx),
+            None => {
+                let dir = self.vault.path.clone();
+                if let Ok(note) = silo_vault::create_note(&dir, &title) {
+                    let id = note.id;
+                    if let Ok(v) = silo_vault::walk_vault(&dir) {
+                        self.vault = v;
+                    }
+                    if let Some(idx) = &self.index {
+                        let _ = idx.upsert_note(&note);
+                        let _ = idx.resolve_links();
+                    }
+                    self.open_note(id, window, cx);
+                }
+            }
+        }
+    }
+
     fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dir = self.vault.path.clone();
         match silo_vault::create_note(&dir, "Untitled") {
@@ -172,6 +220,7 @@ impl AppState {
                 self.saved_text = Some(text);
                 if let Some(idx) = &self.index {
                     let _ = idx.upsert_note(&updated);
+                    let _ = idx.resolve_links();
                 }
             }
             Err(e) => eprintln!("autosave failed for {}: {e}", updated.path.display()),
