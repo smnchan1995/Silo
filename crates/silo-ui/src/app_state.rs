@@ -1,6 +1,10 @@
 use crate::editor::NoteEditor;
+use crate::palette::{
+    PaletteClose, PaletteConfirm, PaletteDown, PaletteState, PaletteUp, TogglePalette, COMMANDS,
+    LIMIT,
+};
 use crate::theme::Theme;
-use gpui::{Context, Entity, Subscription, Task};
+use gpui::{Context, Entity, FocusHandle, Subscription, Task, Window};
 use silo_core::{Note, NoteId, Notebook};
 use silo_vault::AppConfig;
 use std::path::PathBuf;
@@ -26,6 +30,113 @@ pub struct AppState {
     pub saved_text: Option<String>,
     /// Rebuildable SQLite/FTS5 index. `None` in unit tests / on index failure.
     pub index: Option<silo_index::Index>,
+    /// ⌘K command palette state.
+    pub palette: PaletteState,
+    /// Focus target for the palette. `None` in unit tests.
+    pub focus_handle: Option<FocusHandle>,
+}
+
+impl AppState {
+    /// Full-text search via the index (empty when there is no index).
+    pub fn search(&self, query: &str, limit: usize) -> Vec<silo_index::SearchHit> {
+        self.index
+            .as_ref()
+            .and_then(|i| i.search(query, limit).ok())
+            .unwrap_or_default()
+    }
+
+    /// Open a note by id: load its body into the editor, focus it, persist last_note.
+    pub fn open_note(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected = Some(id);
+        let body = self
+            .selected_note()
+            .map(|n| n.body.clone())
+            .unwrap_or_default();
+        if let Some(ed) = self.editor.clone() {
+            ed.update(cx, |e, cx| e.set_content(&body, cx));
+            cx.focus_view(&ed, window);
+        }
+        self.saved_text = Some(body);
+        self.config.last_note = Some(id.to_string());
+        let _ = silo_vault::save_config(&self.config_path, &self.config);
+        cx.notify();
+    }
+
+    fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = self.vault.path.clone();
+        match silo_vault::create_note(&dir, "Untitled") {
+            Ok(note) => {
+                let id = note.id;
+                if let Ok(v) = silo_vault::walk_vault(&dir) {
+                    self.vault = v;
+                }
+                if let Some(idx) = &self.index {
+                    let _ = idx.upsert_note(&note);
+                }
+                self.open_note(id, window, cx);
+            }
+            Err(e) => eprintln!("new note failed: {e}"),
+        }
+    }
+
+    // --- palette actions ----------------------------------------------------
+
+    pub fn toggle_palette(
+        &mut self,
+        _: &TogglePalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.palette.open = !self.palette.open;
+        self.palette.query.clear();
+        self.palette.selected = 0;
+        if self.palette.open {
+            if let Some(h) = &self.focus_handle {
+                window.focus(h, cx);
+            }
+        } else if let Some(ed) = self.editor.clone() {
+            cx.focus_view(&ed, window);
+        }
+        cx.notify();
+    }
+
+    pub fn palette_up(&mut self, _: &PaletteUp, _w: &mut Window, cx: &mut Context<Self>) {
+        self.palette.selected = self.palette.selected.saturating_sub(1);
+        cx.notify();
+    }
+
+    pub fn palette_down(&mut self, _: &PaletteDown, _w: &mut Window, cx: &mut Context<Self>) {
+        self.palette.selected += 1;
+        cx.notify();
+    }
+
+    pub fn palette_close(&mut self, _: &PaletteClose, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette.open = false;
+        if let Some(ed) = self.editor.clone() {
+            cx.focus_view(&ed, window);
+        }
+        cx.notify();
+    }
+
+    pub fn palette_confirm(
+        &mut self,
+        _: &PaletteConfirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let hits = self.search(&self.palette.query, LIMIT);
+        let total = hits.len() + COMMANDS.len();
+        self.palette.open = false;
+        if total > 0 {
+            let sel = self.palette.selected.min(total - 1);
+            if sel < hits.len() {
+                self.open_note(hits[sel].id, window, cx);
+            } else if COMMANDS[sel - hits.len()] == "New note" {
+                self.new_note(window, cx);
+            }
+        }
+        cx.notify();
+    }
 }
 
 impl AppState {
@@ -191,6 +302,8 @@ mod tests {
             last_self_write: None,
             saved_text: None,
             index: None,
+            palette: PaletteState::default(),
+            focus_handle: None,
         };
         let titles: Vec<_> = st.flat_notes().iter().map(|n| n.title.clone()).collect();
         assert!(titles.contains(&"A".to_string()) && titles.contains(&"B".to_string()));
@@ -218,6 +331,8 @@ mod tests {
             last_self_write: None,
             saved_text: None,
             index: None,
+            palette: PaletteState::default(),
+            focus_handle: None,
         };
         assert_eq!(st.selected_note().unwrap().title, "A");
     }

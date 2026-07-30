@@ -1,6 +1,7 @@
 use gpui::{
     div, prelude::*, px, size, App, Bounds, Context, CursorStyle, Div, Entity, FontWeight,
-    KeyBinding, MouseButton, Rgba, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    KeyBinding, KeyDownEvent, MouseButton, Rgba, TitlebarOptions, Window, WindowBounds,
+    WindowOptions,
 };
 use gpui_platform::application;
 use silo_core::{Note, NoteId, Notebook};
@@ -10,6 +11,7 @@ use std::time::Duration;
 
 mod app_state;
 mod editor;
+mod palette;
 mod theme;
 
 use app_state::AppState;
@@ -119,23 +121,6 @@ fn toolbar(t: &Theme) -> impl IntoElement {
         .child(menu_item(t, "Dark ◐"))
 }
 
-/// Select a note: load its body into the editor, focus it, and persist last_note.
-fn select_note(st: &mut AppState, id: NoteId, window: &mut Window, cx: &mut Context<AppState>) {
-    st.selected = Some(id);
-    let body = st
-        .selected_note()
-        .map(|n| n.body.clone())
-        .unwrap_or_default();
-    if let Some(ed) = st.editor.clone() {
-        ed.update(cx, |e, cx| e.set_content(&body, cx));
-        cx.focus_view(&ed, window);
-    }
-    st.saved_text = Some(body);
-    st.config.last_note = Some(id.to_string());
-    let _ = silo_vault::save_config(&st.config_path, &st.config);
-    cx.notify();
-}
-
 fn note_row(t: &Theme, note: &Note, selected: bool, cx: &mut Context<AppState>) -> Div {
     let id = note.id;
     div()
@@ -150,7 +135,7 @@ fn note_row(t: &Theme, note: &Note, selected: bool, cx: &mut Context<AppState>) 
         .child(note.title.clone())
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |st, _ev, window, cx| select_note(st, id, window, cx)),
+            cx.listener(move |st, _ev, window, cx| st.open_note(id, window, cx)),
         )
 }
 
@@ -398,13 +383,52 @@ impl Render for AppState {
             .as_ref()
             .map(|ed| ed.read(cx).text().split_whitespace().count())
             .unwrap_or(0);
-        div()
+        let palette_open = self.palette.open;
+
+        let mut root = div()
             .flex()
             .flex_col()
             .size_full()
             .bg(t.bg)
-            .text_color(t.text)
-            .child(toolbar(&t))
+            .text_color(t.text);
+        if let Some(h) = &self.focus_handle {
+            root = root.track_focus(h);
+        }
+        // ⌘K works regardless of focus (bubbles up from the editor).
+        root = root.on_action(cx.listener(AppState::toggle_palette));
+        if palette_open {
+            root = root
+                .key_context("Palette")
+                .on_action(cx.listener(AppState::palette_up))
+                .on_action(cx.listener(AppState::palette_down))
+                .on_action(cx.listener(AppState::palette_confirm))
+                .on_action(cx.listener(AppState::palette_close))
+                .on_key_down(cx.listener(|st, ev: &KeyDownEvent, _w, cx| {
+                    if !st.palette.open {
+                        return;
+                    }
+                    let ks = &ev.keystroke;
+                    if ks.key == "backspace" {
+                        st.palette.query.pop();
+                        st.palette.selected = 0;
+                        cx.notify();
+                        return;
+                    }
+                    // single-character keys only (skip named keys like enter/up)
+                    if ks.key.chars().count() == 1
+                        && !ks.modifiers.platform
+                        && !ks.modifiers.control
+                    {
+                        if let Some(c) = ks.key_char.as_ref() {
+                            st.palette.query.push_str(c);
+                            st.palette.selected = 0;
+                            cx.notify();
+                        }
+                    }
+                }));
+        }
+
+        root.child(toolbar(&t))
             .child(
                 div()
                     .flex()
@@ -415,6 +439,7 @@ impl Render for AppState {
                     .child(day_rail(&t)),
             )
             .child(footer_bar(&t, word_count))
+            .children(palette::render(&t, self))
     }
 }
 
@@ -437,6 +462,17 @@ fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, ctx),
         KeyBinding::new("cmd-v", Paste, ctx),
         KeyBinding::new("cmd-x", Cut, ctx),
+    ]);
+}
+
+fn bind_palette_keys(cx: &mut App) {
+    use palette::*;
+    cx.bind_keys([
+        KeyBinding::new("cmd-k", TogglePalette, None),
+        KeyBinding::new("up", PaletteUp, Some("Palette")),
+        KeyBinding::new("down", PaletteDown, Some("Palette")),
+        KeyBinding::new("enter", PaletteConfirm, Some("Palette")),
+        KeyBinding::new("escape", PaletteClose, Some("Palette")),
     ]);
 }
 
@@ -517,6 +553,8 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
                     last_self_write: None,
                     saved_text: Some(initial_body),
                     index,
+                    palette: palette::PaletteState::default(),
+                    focus_handle: Some(cx.focus_handle()),
                 }
             })
         },
@@ -527,6 +565,7 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
 pub fn run() -> anyhow::Result<()> {
     application().run(|cx: &mut App| {
         bind_editor_keys(cx);
+        bind_palette_keys(cx);
         let config_path = silo_vault::config_path();
         let config = silo_vault::load_config(&config_path);
         let existing = config.vault_path.as_ref().filter(|p| p.is_dir()).cloned();
