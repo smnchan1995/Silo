@@ -140,6 +140,41 @@ pub fn create_note(dir: &Path, title: &str) -> Result<Note, VaultError> {
     Ok(note)
 }
 
+/// Watch a vault recursively for changes. Returns a channel that yields batches
+/// of changed `.md` paths. The watcher runs on its own thread that lives for the
+/// life of the app (until the receiver is dropped).
+pub fn watch(root: &Path) -> std::sync::mpsc::Receiver<Vec<PathBuf>> {
+    use notify::{RecursiveMode, Watcher};
+    use std::sync::mpsc::channel;
+
+    let (tx, rx) = channel::<Vec<PathBuf>>();
+    let root = root.to_path_buf();
+    std::thread::spawn(move || {
+        let (raw_tx, raw_rx) = channel();
+        let mut watcher = match notify::recommended_watcher(move |res| {
+            let _ = raw_tx.send(res);
+        }) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
+            return;
+        }
+        for event in raw_rx.into_iter().flatten() {
+            let md: Vec<PathBuf> = event
+                .paths
+                .into_iter()
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+                .collect();
+            if !md.is_empty() && tx.send(md).is_err() {
+                break; // receiver gone; stop watching
+            }
+        }
+        drop(watcher);
+    });
+    rx
+}
+
 /// Recursively walk a folder into a `Notebook` tree. `.md` files become notes;
 /// dotfiles and the `.silo` directory are skipped.
 pub fn walk_vault(root: &Path) -> Result<Notebook, VaultError> {

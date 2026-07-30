@@ -6,6 +6,7 @@ use gpui_platform::application;
 use silo_core::{NoteId, Notebook};
 use silo_vault::AppConfig;
 use std::path::PathBuf;
+use std::time::Duration;
 
 mod app_state;
 mod editor;
@@ -90,6 +91,7 @@ fn note_list(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoE
                             ed.update(cx, |e, cx| e.set_content(&body, cx));
                             cx.focus_view(&ed, window);
                         }
+                        st.saved_text = Some(body);
                         st.config.last_note = Some(id.to_string());
                         let _ = silo_vault::save_config(&st.config_path, &st.config);
                         cx.notify();
@@ -189,6 +191,27 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
                         st.schedule_save(cx);
                     },
                 );
+                // Watch the vault; drain change batches on a 300ms poll and reconcile.
+                let rx = silo_vault::watch(&vault_path);
+                cx.spawn(async move |this, cx| loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(300))
+                        .await;
+                    let mut paths = Vec::new();
+                    while let Ok(batch) = rx.try_recv() {
+                        paths.extend(batch);
+                    }
+                    if paths.is_empty() {
+                        continue;
+                    }
+                    if this
+                        .update(cx, |st, cx| st.reload_paths(paths, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                })
+                .detach();
                 AppState {
                     vault,
                     selected,
@@ -198,6 +221,8 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
                     _save_sub: Some(sub),
                     config,
                     config_path,
+                    last_self_write: None,
+                    saved_text: Some(initial_body),
                 }
             })
         },

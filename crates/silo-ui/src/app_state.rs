@@ -4,7 +4,7 @@ use gpui::{Context, Entity, Subscription, Task};
 use silo_core::{Note, NoteId, Notebook};
 use silo_vault::AppConfig;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct AppState {
     pub vault: Notebook,
@@ -20,6 +20,10 @@ pub struct AppState {
     pub config: AppConfig,
     /// Where `config` is stored.
     pub config_path: PathBuf,
+    /// Path + time of our last autosave, so the watcher can ignore self-writes.
+    pub last_self_write: Option<(PathBuf, Instant)>,
+    /// The editor's content as we last read/wrote it — used to detect "dirty".
+    pub saved_text: Option<String>,
 }
 
 impl AppState {
@@ -39,19 +43,62 @@ impl AppState {
             return;
         };
         let text = ed.read(cx).text();
-        let Some(note) = self.selected_note() else {
-            return;
+        let updated = match self.selected_note() {
+            Some(note) => Note {
+                id: note.id,
+                path: note.path.clone(),
+                title: note.title.clone(), // not persisted; derived on read
+                frontmatter: note.frontmatter.clone(),
+                body: text.clone(),
+            },
+            None => return,
         };
-        let updated = Note {
-            id: note.id,
-            path: note.path.clone(),
-            title: note.title.clone(), // not persisted; derived on read
-            frontmatter: note.frontmatter.clone(),
-            body: text,
-        };
-        if let Err(e) = silo_vault::write_note(&updated) {
-            eprintln!("autosave failed for {}: {e}", updated.path.display());
+        match silo_vault::write_note(&updated) {
+            Ok(()) => {
+                self.last_self_write = Some((updated.path.clone(), Instant::now()));
+                self.saved_text = Some(text);
+            }
+            Err(e) => eprintln!("autosave failed for {}: {e}", updated.path.display()),
         }
+    }
+
+    /// Reconcile external on-disk changes. Ignores our own recent autosave,
+    /// re-walks the vault, and refreshes the open note's editor when it isn't dirty.
+    pub fn reload_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|p| {
+                !matches!(&self.last_self_write,
+                    Some((sp, t)) if sp == p && now.duration_since(*t) < Duration::from_secs(1))
+            })
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+
+        let root = self.vault.path.clone();
+        if let Ok(v) = silo_vault::walk_vault(&root) {
+            self.vault = v;
+        }
+
+        let open = self
+            .selected_note()
+            .map(|n| (n.path.clone(), n.body.clone()));
+        if let Some((note_path, new_body)) = open {
+            if paths.iter().any(|p| p == &note_path) {
+                let current = self.editor.as_ref().map(|ed| ed.read(cx).text());
+                let dirty = current.as_deref() != self.saved_text.as_deref();
+                if !dirty {
+                    if let Some(ed) = self.editor.clone() {
+                        ed.update(cx, |e, cx| e.set_content(&new_body, cx));
+                    }
+                    self.saved_text = Some(new_body);
+                }
+                // dirty case (conflict) handled in Task 4
+            }
+        }
+        cx.notify();
     }
 }
 
@@ -122,6 +169,8 @@ mod tests {
             _save_sub: None,
             config: AppConfig::default(),
             config_path: PathBuf::from("/tmp/silo-test-config.json"),
+            last_self_write: None,
+            saved_text: None,
         };
         let titles: Vec<_> = st.flat_notes().iter().map(|n| n.title.clone()).collect();
         assert!(titles.contains(&"A".to_string()) && titles.contains(&"B".to_string()));
@@ -146,6 +195,8 @@ mod tests {
             _save_sub: None,
             config: AppConfig::default(),
             config_path: PathBuf::from("/tmp/silo-test-config.json"),
+            last_self_write: None,
+            saved_text: None,
         };
         assert_eq!(st.selected_note().unwrap().title, "A");
     }
