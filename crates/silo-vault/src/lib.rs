@@ -115,8 +115,61 @@ fn slug(title: &str) -> String {
     }
 }
 
+/// Create a new folder under `parent` (name slugged, de-duplicated).
+pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, VaultError> {
+    let base = slug(name);
+    let mut path = parent.join(&base);
+    let mut i = 2;
+    while path.exists() {
+        path = parent.join(format!("{base}-{i}"));
+        i += 1;
+    }
+    std::fs::create_dir_all(&path).map_err(|source| VaultError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
+}
+
+/// Soft-delete: move a note or folder into `<vault>/.silo/trash/` (recoverable),
+/// rather than permanently removing it. De-duplicates names in the trash.
+pub fn trash(vault_root: &Path, target: &Path) -> Result<(), VaultError> {
+    let trash_dir = vault_root.join(".silo").join("trash");
+    std::fs::create_dir_all(&trash_dir).map_err(|source| VaultError::Io {
+        path: trash_dir.clone(),
+        source,
+    })?;
+    let name = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("item");
+    let mut dest = trash_dir.join(name);
+    let mut i = 1;
+    while dest.exists() {
+        dest = trash_dir.join(format!("{i}-{name}"));
+        i += 1;
+    }
+    std::fs::rename(target, &dest).map_err(|source| VaultError::Io {
+        path: target.to_path_buf(),
+        source,
+    })?;
+    Ok(())
+}
+
+/// The directory that holds a note's children: `Foo.md` → `Foo/` (the sibling
+/// folder, which may not exist yet).
+pub fn children_dir(note_path: &Path) -> PathBuf {
+    note_path.with_extension("")
+}
+
 /// Create a new note in `dir` with the given title, write it, and return it.
+/// Creates `dir` if it doesn't exist (so a note can be added under a leaf note,
+/// whose children folder is created on demand).
 pub fn create_note(dir: &Path, title: &str) -> Result<Note, VaultError> {
+    std::fs::create_dir_all(dir).map_err(|source| VaultError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
     let id = NoteId::new();
     let now = now_rfc3339();
     let mut path = dir.join(format!("{}.md", slug(title)));
@@ -205,44 +258,110 @@ pub fn watch(root: &Path) -> std::sync::mpsc::Receiver<Vec<PathBuf>> {
     rx
 }
 
-/// Recursively walk a folder into a `Notebook` tree. `.md` files become notes;
-/// dotfiles and the `.silo` directory are skipped.
+/// Walk the vault root into the unified tree. The root itself is not a note
+/// (`note: None`); its children are the top-level notes.
 pub fn walk_vault(root: &Path) -> Result<Notebook, VaultError> {
     let name = root
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("Vault")
         .to_string();
-    let mut children = Vec::new();
-    let mut notes = Vec::new();
-
-    let entries = fs::read_dir(root).map_err(|source| VaultError::Io {
-        path: root.to_path_buf(),
-        source,
-    })?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let fname = entry.file_name();
-        let fname = fname.to_string_lossy();
-        if fname.starts_with('.') {
-            continue; // skip .silo and all dotfiles
-        }
-        if path.is_dir() {
-            children.push(walk_vault(&path)?);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            notes.push(read_note(&path)?);
-        }
-    }
-    // Stable order: notebooks then notes, each alphabetical.
-    children.sort_by(|a, b| a.name.cmp(&b.name));
-    notes.sort_by_key(|a| a.title.to_lowercase());
-
     Ok(Notebook {
         name,
         path: root.to_path_buf(),
-        children,
-        notes,
+        note: None,
+        is_virtual: false,
+        children: walk_children(root)?,
     })
+}
+
+/// Turn a folder slug into a display title for a virtual folder-note:
+/// `note-taking` → `Note taking`.
+fn folder_title(name: &str) -> String {
+    let spaced = name.replace(['-', '_'], " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => spaced,
+    }
+}
+
+/// Walk a directory into child notes under the sibling-folder convention: `X.md`
+/// is a note whose children live in `X/`; a directory with no matching `X.md` is
+/// a virtual folder-note. Dotfiles and `.silo` are skipped.
+fn walk_children(dir: &Path) -> Result<Vec<Notebook>, VaultError> {
+    let entries = fs::read_dir(dir).map_err(|source| VaultError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+
+    let mut md_files: Vec<PathBuf> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue; // skip .silo and all dotfiles
+        }
+        if path.is_dir() {
+            subdirs.push(path);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            md_files.push(path);
+        }
+    }
+
+    let mut nodes = Vec::new();
+    // Real notes; each consumes its sibling `<stem>/` folder as children.
+    for md in &md_files {
+        let note = read_note(md)?;
+        let cdir = children_dir(md);
+        let children = if cdir.is_dir() {
+            subdirs.retain(|d| d != &cdir);
+            walk_children(&cdir)?
+        } else {
+            Vec::new()
+        };
+        nodes.push(Notebook {
+            name: note.title.clone(),
+            path: cdir,
+            note: Some(note),
+            is_virtual: false,
+            children,
+        });
+    }
+    // Remaining directories back no note file → virtual folder-notes.
+    for sub in subdirs {
+        let fname = sub
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("folder")
+            .to_string();
+        let would_be = sub.with_extension("md");
+        let vid = NoteId::from_path(&would_be);
+        let now = now_rfc3339();
+        let note = Note {
+            id: vid,
+            path: would_be,
+            title: folder_title(&fname),
+            frontmatter: Frontmatter {
+                id: vid,
+                created: now.clone(),
+                updated: now,
+                tags: vec![],
+                pinned: false,
+            },
+            body: String::new(),
+        };
+        let children = walk_children(&sub)?;
+        nodes.push(Notebook {
+            name: note.title.clone(),
+            path: sub,
+            note: Some(note),
+            is_virtual: true,
+            children,
+        });
+    }
+    nodes.sort_by_key(|n| n.name.to_lowercase());
+    Ok(nodes)
 }
 
 #[cfg(test)]
@@ -335,6 +454,24 @@ mod tests {
     }
 
     #[test]
+    fn create_folder_makes_dir() {
+        let dir = tempdir().unwrap();
+        let p = create_folder(dir.path(), "My Folder").unwrap();
+        assert!(p.is_dir());
+        assert_eq!(p.file_name().unwrap().to_str().unwrap(), "my-folder");
+    }
+
+    #[test]
+    fn trash_moves_target_out_of_vault() {
+        let dir = tempdir().unwrap();
+        let note = dir.path().join("a.md");
+        fs::write(&note, "# A\n").unwrap();
+        trash(dir.path(), &note).unwrap();
+        assert!(!note.exists());
+        assert!(dir.path().join(".silo/trash/a.md").exists());
+    }
+
+    #[test]
     fn create_note_writes_and_is_readable() {
         let dir = tempdir().unwrap();
         let note = create_note(dir.path(), "My First Note").unwrap();
@@ -354,7 +491,26 @@ mod tests {
         fs::write(dir.path().join(".silo/index.sqlite"), "x").unwrap();
         let nb = walk_vault(dir.path()).unwrap();
         assert_eq!(nb.note_count(), 2); // inbox + research/z, NOT .silo
-        assert!(nb.children.iter().any(|c| c.name == "research"));
+                                        // `research/` has no backing `research.md` → a virtual folder-note.
+        let research = nb.children.iter().find(|c| c.name == "Research").unwrap();
+        assert!(research.is_virtual);
+        assert_eq!(research.children.len(), 1); // z.md
         assert!(nb.children.iter().all(|c| c.name != ".silo"));
+    }
+
+    #[test]
+    fn note_under_note_via_sibling_folder() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("kyoto.md"), "# Kyoto\n").unwrap();
+        fs::create_dir(dir.path().join("kyoto")).unwrap();
+        fs::write(dir.path().join("kyoto/day-1.md"), "# Day 1\n").unwrap();
+        let nb = walk_vault(dir.path()).unwrap();
+        // One top-level note (kyoto), which has one child (day-1) — not two siblings.
+        assert_eq!(nb.children.len(), 1);
+        let kyoto = &nb.children[0];
+        assert_eq!(kyoto.name, "Kyoto");
+        assert!(!kyoto.is_virtual);
+        assert_eq!(kyoto.children.len(), 1);
+        assert_eq!(kyoto.children[0].name, "Day 1");
     }
 }

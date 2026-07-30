@@ -3,7 +3,11 @@
 
 use crate::app_state::AppState;
 use crate::theme::Theme;
-use gpui::{actions, deferred, div, prelude::*, px, rgba, AnyElement, Div, FontWeight};
+use gpui::{
+    actions, deferred, div, ease_out_quint, prelude::*, px, rgba, Animation, AnimationExt,
+    AnyElement, Div, FontWeight,
+};
+use std::time::Duration;
 
 actions!(
     silo_palette,
@@ -36,6 +40,7 @@ fn row(t: &Theme, title: &str, sub: &str, selected: bool) -> Div {
         .px(px(14.0))
         .py(px(7.0))
         .when(selected, |d| d.bg(t.surface))
+        .when(!selected, |d| d.hover(|s| s.bg(t.hover)))
         .child(
             div()
                 .text_color(if selected { t.accent } else { t.text })
@@ -91,6 +96,12 @@ pub fn render(t: &Theme, st: &AppState) -> Option<AnyElement> {
         )
         .child(list);
 
+    // sRise: the card fades in and rises ~8px; the dim backdrop is instant.
+    let animated_card = card.with_animation(
+        "palette-in",
+        Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+        |el, delta| el.opacity(delta).mt(px(8.0 * (1.0 - delta))),
+    );
     let backdrop = div()
         .absolute()
         .size_full()
@@ -98,7 +109,7 @@ pub fn render(t: &Theme, st: &AppState) -> Option<AnyElement> {
         .justify_center()
         .pt(px(110.0))
         .bg(rgba(0x00000026))
-        .child(card);
+        .child(animated_card);
 
     Some(deferred(backdrop).into_any_element())
 }

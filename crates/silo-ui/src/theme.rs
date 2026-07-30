@@ -18,6 +18,8 @@ pub struct Theme {
     pub faint: Rgba,
     /// Hairline dividers.
     pub divider: Rgba,
+    /// Subtle background for hovered interactive rows.
+    pub hover: Rgba,
     /// Signature red-orange: selection, active nav, emphasis. Used sparingly.
     pub accent: Rgba,
 }
@@ -31,6 +33,7 @@ impl Theme {
             muted: rgb(0x6f6a6a),
             faint: rgb(0xb3aeae),
             divider: rgb(0xe4e1e1),
+            hover: rgb(0xe7e4e3),
             accent: rgb(0xec3013),
         }
     }
@@ -44,6 +47,7 @@ impl Theme {
             muted: rgb(0x8b8681),
             faint: rgb(0x565250),
             divider: rgb(0x322f2c),
+            hover: rgb(0x272522),
             accent: rgb(0xe08a70),
         }
     }

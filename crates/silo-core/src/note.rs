@@ -12,6 +12,21 @@ impl NoteId {
     pub fn new() -> Self {
         NoteId(Ulid::new())
     }
+
+    /// A deterministic id derived from a path. Used for "virtual" folder-notes —
+    /// a directory that holds child notes but has no backing `.md` file (and thus
+    /// no stored id) yet — so selection stays stable across vault re-walks until
+    /// the note is materialized on first edit.
+    pub fn from_path(path: &std::path::Path) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        path.hash(&mut h);
+        let lo = h.finish();
+        "silo-hi".hash(&mut h);
+        path.hash(&mut h);
+        let hi = h.finish();
+        NoteId(Ulid::from(((hi as u128) << 64) | lo as u128))
+    }
 }
 
 impl Default for NoteId {

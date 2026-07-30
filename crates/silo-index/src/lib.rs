@@ -210,10 +210,7 @@ fn parse_id(s: &str) -> NoteId {
 }
 
 fn collect<'a>(nb: &'a Notebook, out: &mut Vec<&'a Note>) {
-    out.extend(nb.notes.iter());
-    for c in &nb.children {
-        collect(c, out);
-    }
+    out.extend(nb.real_notes());
 }
 
 #[cfg(test)]
@@ -283,7 +280,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let vault = vault_with(dir.path(), &[("a.md", "# Alpha\noriginal")]);
         let idx = Index::open_or_build(dir.path(), &vault).unwrap();
-        let mut note = vault.notes[0].clone();
+        let mut note = vault.real_notes()[0].clone();
         note.body = "# Alpha\nkryptonite".into();
         idx.upsert_note(&note).unwrap();
         assert_eq!(idx.search("kryptonite", 10).unwrap().len(), 1);
