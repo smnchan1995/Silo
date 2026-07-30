@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 silo-core = { path = "../silo-core" }
 silo-vault = { path = "../silo-vault" }
+silo-index = { path = "../silo-index" }
 gpui = { workspace = true }
 # font-kit enables text rendering in the macOS platform layer (gpui_macos).
 # gpui_platform's default features are empty and gpui's font-kit does not

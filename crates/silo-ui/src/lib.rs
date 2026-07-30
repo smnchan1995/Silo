@@ -459,6 +459,7 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
     };
     let theme = Theme::light();
     let text_color = theme.text;
+    let index = silo_index::Index::open_or_build(&vault_path, &vault).ok();
     let selected: Option<NoteId> = config.last_note.as_deref().and_then(|s| s.parse().ok());
     let initial_body = selected
         .and_then(|id| find_note_body(&vault, id))
@@ -515,6 +516,7 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
                     config_path,
                     last_self_write: None,
                     saved_text: Some(initial_body),
+                    index,
                 }
             })
         },

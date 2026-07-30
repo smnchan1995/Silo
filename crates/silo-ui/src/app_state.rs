@@ -24,6 +24,8 @@ pub struct AppState {
     pub last_self_write: Option<(PathBuf, Instant)>,
     /// The editor's content as we last read/wrote it — used to detect "dirty".
     pub saved_text: Option<String>,
+    /// Rebuildable SQLite/FTS5 index. `None` in unit tests / on index failure.
+    pub index: Option<silo_index::Index>,
 }
 
 impl AppState {
@@ -57,6 +59,9 @@ impl AppState {
             Ok(()) => {
                 self.last_self_write = Some((updated.path.clone(), Instant::now()));
                 self.saved_text = Some(text);
+                if let Some(idx) = &self.index {
+                    let _ = idx.upsert_note(&updated);
+                }
             }
             Err(e) => eprintln!("autosave failed for {}: {e}", updated.path.display()),
         }
@@ -185,6 +190,7 @@ mod tests {
             config_path: PathBuf::from("/tmp/silo-test-config.json"),
             last_self_write: None,
             saved_text: None,
+            index: None,
         };
         let titles: Vec<_> = st.flat_notes().iter().map(|n| n.title.clone()).collect();
         assert!(titles.contains(&"A".to_string()) && titles.contains(&"B".to_string()));
@@ -211,6 +217,7 @@ mod tests {
             config_path: PathBuf::from("/tmp/silo-test-config.json"),
             last_self_write: None,
             saved_text: None,
+            index: None,
         };
         assert_eq!(st.selected_note().unwrap().title, "A");
     }
