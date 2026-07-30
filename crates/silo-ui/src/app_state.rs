@@ -2,6 +2,8 @@ use crate::editor::NoteEditor;
 use crate::theme::Theme;
 use gpui::{Context, Entity, Subscription, Task};
 use silo_core::{Note, NoteId, Notebook};
+use silo_vault::AppConfig;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub struct AppState {
@@ -14,6 +16,10 @@ pub struct AppState {
     pub save_task: Option<Task<()>>,
     /// Keeps the editor edit-event subscription alive.
     pub _save_sub: Option<Subscription>,
+    /// Persisted app config (last vault, last note, theme).
+    pub config: AppConfig,
+    /// Where `config` is stored.
+    pub config_path: PathBuf,
 }
 
 impl AppState {
@@ -114,6 +120,8 @@ mod tests {
             editor: None,
             save_task: None,
             _save_sub: None,
+            config: AppConfig::default(),
+            config_path: PathBuf::from("/tmp/silo-test-config.json"),
         };
         let titles: Vec<_> = st.flat_notes().iter().map(|n| n.title.clone()).collect();
         assert!(titles.contains(&"A".to_string()) && titles.contains(&"B".to_string()));
@@ -136,6 +144,8 @@ mod tests {
             editor: None,
             save_task: None,
             _save_sub: None,
+            config: AppConfig::default(),
+            config_path: PathBuf::from("/tmp/silo-test-config.json"),
         };
         assert_eq!(st.selected_note().unwrap().title, "A");
     }
