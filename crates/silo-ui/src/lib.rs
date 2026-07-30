@@ -1,8 +1,8 @@
 use gpui::{
-    div, ease_out_quint, img, linear_color_stop, linear_gradient, prelude::*, px, size, Animation,
-    AnimationExt, App, Bounds, Context, CursorStyle, Div, Entity, FontWeight, KeyBinding,
-    KeyDownEvent, MouseButton, Rgba, SharedString, TitlebarOptions, Window, WindowBounds,
-    WindowOptions,
+    div, ease_out_quint, img, linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    Animation, AnimationExt, App, Bounds, Context, CursorStyle, Div, Entity, FontWeight,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, Rgba, SharedString, TitlebarOptions,
+    Window, WindowBounds, WindowControlArea, WindowOptions,
 };
 use gpui_platform::application;
 use silo_core::{NoteId, Notebook};
@@ -124,30 +124,59 @@ fn sparkline(t: &Theme) -> Div {
 
 // --- panes ------------------------------------------------------------------
 
-/// Slim app toolbar under the native title bar. The theme item is live; the
-/// others are placeholders.
-fn toolbar(t: &Theme, dark: bool, cx: &mut Context<AppState>) -> impl IntoElement {
+/// Height of the custom title bar (drawn into the transparent native titlebar).
+const TITLEBAR_H: f32 = 38.0;
+
+/// The app controls, rendered into the (transparent) native macOS title bar:
+/// the wordmark + shortcuts + theme toggle on the right, with the whole bar a
+/// window-drag region (double-click to zoom) and room on the left for the
+/// traffic lights.
+fn titlebar(t: &Theme, dark: bool, cx: &mut Context<AppState>) -> impl IntoElement {
     let theme_label = if dark { "Light ◐" } else { "Dark ◐" };
     div()
         .flex()
         .items_center()
-        .justify_end()
-        .gap(px(16.0))
-        .h(px(40.0))
-        .px(px(16.0))
-        .bg(t.bg)
+        .h(px(TITLEBAR_H))
+        .w_full()
+        .bg(t.surface)
         .border_b_1()
         .border_color(t.divider)
-        .child(menu_item(t, "New ⌘N"))
-        .child(menu_item(t, "⌘K"))
-        .child(menu_item(t, "Day ⌘D"))
+        .pl(px(84.0)) // clear the traffic lights
+        .pr(px(16.0))
+        // The bar drags the window; double-click zooms it.
+        .window_control_area(WindowControlArea::Drag)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_st, ev: &MouseDownEvent, window, _cx| {
+                if ev.click_count == 2 {
+                    window.titlebar_double_click();
+                }
+            }),
+        )
         .child(
-            menu_item(t, theme_label)
-                .cursor(CursorStyle::PointingHand)
-                .hover(|s| s.text_color(t.text))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|st, _e, _w, cx| st.toggle_theme(cx)),
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.muted)
+                .child("Silo"),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(16.0))
+                .child(menu_item(t, "New ⌘N"))
+                .child(menu_item(t, "⌘K"))
+                .child(menu_item(t, "Day ⌘D"))
+                .child(
+                    menu_item(t, theme_label)
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(|s| s.text_color(t.text))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|st, _e, _w, cx| st.toggle_theme(cx)),
+                        ),
                 ),
         )
 }
@@ -1890,7 +1919,7 @@ impl Render for AppState {
                 }));
         }
 
-        root.child(toolbar(&t, dark, cx))
+        root.child(titlebar(&t, dark, cx))
             .child(
                 div()
                     .flex()
@@ -1976,7 +2005,10 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
                 title: Some("Silo".into()),
-                ..Default::default()
+                // Transparent native titlebar so our own bar draws into it.
+                appears_transparent: true,
+                // Vertically center the traffic lights in our taller title bar.
+                traffic_light_position: Some(point(px(13.0), px(13.0))),
             }),
             ..Default::default()
         },
