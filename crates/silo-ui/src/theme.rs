@@ -6,34 +6,45 @@ pub const RADIUS: f32 = 0.0;
 
 #[derive(Clone, Debug)]
 pub struct Theme {
+    /// Main content background (airy paper).
     pub bg: Rgba,
+    /// Rail/sidebar background (a touch warmer/darker than `bg`).
     pub surface: Rgba,
+    /// Primary ink.
     pub text: Rgba,
+    /// Secondary text: labels, counts, breadcrumbs.
+    pub muted: Rgba,
+    /// Tertiary text: placeholders, neglected/disabled rows.
+    pub faint: Rgba,
+    /// Hairline dividers.
     pub divider: Rgba,
-    /// Used for selection highlight / active nav (wired in later milestones).
-    #[allow(dead_code)]
+    /// Signature red-orange: selection, active nav, emphasis. Used sparingly.
     pub accent: Rgba,
 }
 
 impl Theme {
     pub fn light() -> Self {
         Self {
-            bg: rgb(0xf3f2f2),
-            surface: rgb(0xeae9e9),
+            bg: rgb(0xf7f6f5),
+            surface: rgb(0xf1efee),
             text: rgb(0x201e1d),
-            divider: rgb(0x605d5d),
+            muted: rgb(0x6f6a6a),
+            faint: rgb(0xb3aeae),
+            divider: rgb(0xe4e1e1),
             accent: rgb(0xec3013),
         }
     }
 
-    /// Dark variant — wired to a theme toggle in the M2 (Edit & Save) milestone.
+    /// Dark variant — wired to a theme toggle in a later milestone.
     #[allow(dead_code)]
     pub fn dark() -> Self {
         Self {
-            bg: rgb(0x201e1d),
-            surface: rgb(0x2d2b2b),
-            text: rgb(0xf8f4f4),
-            divider: rgb(0x605d5d),
+            bg: rgb(0x1a1918),
+            surface: rgb(0x232120),
+            text: rgb(0xf2efee),
+            muted: rgb(0x9b9797),
+            faint: rgb(0x605d5d),
+            divider: rgb(0x33302f),
             accent: rgb(0xff563c),
         }
     }
@@ -46,7 +57,7 @@ mod tests {
     #[test]
     fn light_theme_matches_modernist_tokens() {
         let t = Theme::light();
-        assert_eq!(t.bg, rgb(0xf3f2f2));
+        assert_eq!(t.bg, rgb(0xf7f6f5));
         assert_eq!(t.text, rgb(0x201e1d));
         assert_eq!(t.accent, rgb(0xec3013));
     }
