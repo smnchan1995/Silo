@@ -19,6 +19,12 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct Backlink {
+    pub from_id: NoteId,
+    pub from_title: String,
+}
+
 pub struct Index {
     conn: Connection,
 }
@@ -39,7 +45,54 @@ impl Index {
         )?;
         let idx = Index { conn };
         idx.rebuild(vault)?;
+        idx.resolve_links()?;
         Ok(idx)
+    }
+
+    /// Fill `links.to_id` by matching `to_title` to a note title (case-insensitive).
+    pub fn resolve_links(&self) -> Result<(), IndexError> {
+        self.conn.execute(
+            "UPDATE links SET to_id = (
+                 SELECT id FROM notes_fts WHERE lower(title) = lower(links.to_title) LIMIT 1
+             )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// The id of a note with this title (case-insensitive), if any.
+    pub fn resolve_title(&self, title: &str) -> Result<Option<NoteId>, IndexError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM notes_fts WHERE lower(title) = lower(?) LIMIT 1")?;
+        let mut rows = stmt.query(params![title])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(parse_id(&r.get::<_, String>(0)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Notes whose links resolve to `id` ("Linked mentions").
+    pub fn backlinks(&self, id: NoteId) -> Result<Vec<Backlink>, IndexError> {
+        let id = id.to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT l.from_id, f.title
+               FROM links l JOIN notes_fts f ON f.id = l.from_id
+              WHERE l.to_id = ?
+              GROUP BY l.from_id
+              ORDER BY f.title",
+        )?;
+        let rows = stmt.query_map(params![id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.map(|res| {
+            let (fid, title) = res?;
+            Ok(Backlink {
+                from_id: parse_id(&fid),
+                from_title: title,
+            })
+        })
+        .collect()
     }
 
     fn rebuild(&self, vault: &Notebook) -> Result<(), IndexError> {
@@ -198,6 +251,31 @@ mod tests {
         let vault = vault_with(dir.path(), &[("a.md", "# Alpha\nx"), ("b.md", "# Beta\ny")]);
         let idx = Index::open_or_build(dir.path(), &vault).unwrap();
         assert_eq!(idx.search("", 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn resolves_links_and_reports_backlinks() {
+        let dir = tempdir().unwrap();
+        let vault = vault_with(
+            dir.path(),
+            &[
+                ("a.md", "# Alpha\nsee [[Beta]] for more"),
+                ("b.md", "# Beta\nthe target"),
+            ],
+        );
+        let idx = Index::open_or_build(dir.path(), &vault).unwrap();
+        let beta = idx.resolve_title("beta").unwrap().unwrap();
+        let back = idx.backlinks(beta).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].from_title, "Alpha");
+    }
+
+    #[test]
+    fn unresolved_link_has_no_backlink() {
+        let dir = tempdir().unwrap();
+        let vault = vault_with(dir.path(), &[("a.md", "# Alpha\nsee [[Ghost]]")]);
+        let idx = Index::open_or_build(dir.path(), &vault).unwrap();
+        assert!(idx.resolve_title("ghost").unwrap().is_none());
     }
 
     #[test]
