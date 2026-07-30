@@ -4,5 +4,12 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
-# Filled in the M3 (Index & Search) plan: rusqlite + FTS5.
 [dependencies]
+silo-core = { path = "../silo-core" }
+silo-markdown = { path = "../silo-markdown" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+silo-vault = { path = "../silo-vault" }
