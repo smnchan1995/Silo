@@ -90,6 +90,12 @@ impl NoteEditor {
         self.content.to_string()
     }
 
+    /// Recolor the text/caret (used when the theme toggles).
+    pub fn set_text_color(&mut self, color: Rgba, cx: &mut Context<Self>) {
+        self.text_color = color;
+        cx.notify();
+    }
+
     /// Replace the whole buffer (used when the selected note changes).
     pub fn set_content(&mut self, content: &str, cx: &mut Context<Self>) {
         self.content = content.to_string().into();

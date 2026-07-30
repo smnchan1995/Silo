@@ -14,7 +14,7 @@ mod editor;
 mod palette;
 mod theme;
 
-use app_state::AppState;
+use app_state::{AppState, View};
 use editor::{EditEvent, NoteEditor};
 use theme::Theme;
 
@@ -28,7 +28,7 @@ fn label(t: &Theme, text: &str) -> impl IntoElement {
         .child(text.to_uppercase())
 }
 
-fn menu_item(t: &Theme, text: &str) -> impl IntoElement {
+fn menu_item(t: &Theme, text: &str) -> Div {
     div()
         .text_xs()
         .text_color(t.muted)
@@ -41,21 +41,24 @@ fn bullet(color: Rgba) -> impl IntoElement {
 }
 
 /// A non-interactive sidebar nav entry for a feature that isn't built yet.
-fn nav_placeholder(t: &Theme, name: &str, meta: &str) -> Div {
+/// `active` renders it like the mockup's "Today" (accent + underline).
+fn nav_placeholder(t: &Theme, name: &str, meta: &str, active: bool) -> Div {
+    let mut name_el = div()
+        .flex_1()
+        .text_sm()
+        .text_color(if active { t.accent } else { t.muted })
+        .child(name.to_string());
+    if active {
+        name_el = name_el.font_weight(FontWeight::MEDIUM).underline();
+    }
     let mut row = div()
         .flex()
         .items_center()
         .gap(px(8.0))
         .px(px(6.0))
         .py(px(4.0))
-        .child(bullet(t.faint))
-        .child(
-            div()
-                .flex_1()
-                .text_sm()
-                .text_color(t.muted)
-                .child(name.to_string()),
-        );
+        .child(bullet(if active { t.accent } else { t.faint }))
+        .child(name_el);
     if !meta.is_empty() {
         row = row.child(div().text_xs().text_color(t.faint).child(meta.to_string()));
     }
@@ -101,16 +104,30 @@ fn sparkline(t: &Theme) -> Div {
     row
 }
 
+/// A vertical divider inset from top/bottom so it never touches the toolbar or
+/// footer rules (avoids intersecting lines). The outer column is full-height and
+/// transparent; the inner 1px line is shortened by vertical margin.
+fn vdivider(t: &Theme) -> impl IntoElement {
+    div()
+        .w(px(1.0))
+        .h_full()
+        .flex()
+        .flex_col()
+        .child(div().flex_1().my(px(12.0)).bg(t.divider))
+}
+
 // --- panes ------------------------------------------------------------------
 
-/// Slim app toolbar under the native title bar (menu actions are placeholders).
-fn toolbar(t: &Theme) -> impl IntoElement {
+/// Slim app toolbar under the native title bar. The theme item is live; the
+/// others are placeholders.
+fn toolbar(t: &Theme, dark: bool, cx: &mut Context<AppState>) -> impl IntoElement {
+    let theme_label = if dark { "Light ◐" } else { "Dark ◐" };
     div()
         .flex()
         .items_center()
         .justify_end()
         .gap(px(16.0))
-        .h(px(38.0))
+        .h(px(40.0))
         .px(px(16.0))
         .bg(t.bg)
         .border_b_1()
@@ -118,66 +135,85 @@ fn toolbar(t: &Theme) -> impl IntoElement {
         .child(menu_item(t, "New ⌘N"))
         .child(menu_item(t, "⌘K"))
         .child(menu_item(t, "Day ⌘D"))
-        .child(menu_item(t, "Dark ◐"))
+        .child(
+            menu_item(t, theme_label)
+                .cursor(CursorStyle::PointingHand)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|st, _e, _w, cx| st.toggle_theme(cx)),
+                ),
+        )
 }
 
 fn note_row(t: &Theme, note: &Note, selected: bool, cx: &mut Context<AppState>) -> Div {
     let id = note.id;
-    div()
-        .flex()
-        .items_center()
+    let mut row = div()
         .px(px(6.0))
         .py(px(4.0))
         .cursor(CursorStyle::PointingHand)
         .text_sm()
         .text_color(if selected { t.accent } else { t.text })
-        .when(selected, |d| d.font_weight(FontWeight::SEMIBOLD))
-        .child(note.title.clone())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |st, _ev, window, cx| st.open_note(id, window, cx)),
-        )
+        .child(note.title.clone());
+    if selected {
+        row = row.font_weight(FontWeight::SEMIBOLD).underline();
+    }
+    row.on_mouse_down(
+        MouseButton::Left,
+        cx.listener(move |st, _ev, window, cx| st.open_note(id, window, cx)),
+    )
 }
 
-/// A notebook and its notes/children, nested under a left rule (concrete `Div`
-/// return type so it can recurse).
-fn notebook_group(t: &Theme, nb: &Notebook, st: &AppState, cx: &mut Context<AppState>) -> Div {
-    let count = nb.note_count();
+/// Does this subtree contain the given note?
+fn subtree_contains(nb: &Notebook, id: NoteId) -> bool {
+    nb.notes.iter().any(|n| n.id == id) || nb.children.iter().any(|c| subtree_contains(c, id))
+}
+
+/// A folder and its notes/subfolders as a nested tree node. The connector rule
+/// and folder name light up in accent when the selected note is inside this
+/// subtree, so the path to the open note is highlighted.
+fn tree_node(t: &Theme, nb: &Notebook, st: &AppState, cx: &mut Context<AppState>) -> Div {
+    let on_path = st
+        .selected
+        .map(|id| subtree_contains(nb, id))
+        .unwrap_or(false);
+    let rule = if on_path { t.accent } else { t.divider };
+    let name_color = if on_path { t.text } else { t.muted };
+
     let mut nested = div()
         .flex()
         .flex_col()
-        .gap(px(2.0))
-        .ml(px(9.0))
-        .pl(px(10.0))
+        .gap(px(1.0))
+        .ml(px(7.0))
+        .pl(px(11.0))
         .border_l_1()
-        .border_color(t.divider);
+        .border_color(rule);
     for n in &nb.notes {
         nested = nested.child(note_row(t, n, st.selected == Some(n.id), cx));
     }
     for c in &nb.children {
-        nested = nested.child(notebook_group(t, c, st, cx));
+        nested = nested.child(tree_node(t, c, st, cx));
     }
+
     div()
         .flex()
         .flex_col()
-        .pt(px(6.0))
+        .pt(px(4.0))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(8.0))
                 .px(px(6.0))
-                .py(px(4.0))
-                .child(bullet(t.faint))
+                .py(px(3.0))
+                .child(bullet(if on_path { t.accent } else { t.faint }))
                 .child(
                     div()
                         .flex_1()
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(t.text)
+                        .text_color(name_color)
                         .child(nb.name.clone()),
-                )
-                .child(div().text_xs().text_color(t.faint).child(count.to_string())),
+                ),
         )
         .child(nested)
 }
@@ -189,17 +225,15 @@ fn sidebar(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoEle
         tree = tree.child(note_row(t, n, st.selected == Some(n.id), cx));
     }
     for child in &st.vault.children {
-        tree = tree.child(notebook_group(t, child, st, cx));
+        tree = tree.child(tree_node(t, child, st, cx));
     }
 
     div()
         .flex()
         .flex_col()
-        .w(px(248.0))
+        .w(px(232.0))
         .h_full()
         .bg(t.surface)
-        .border_r_1()
-        .border_color(t.divider)
         .child(
             // header: wordmark + section label
             div()
@@ -225,7 +259,14 @@ fn sidebar(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoEle
                 .flex_1()
                 .px(px(10.0))
                 // placeholders (planner views — not built yet)
-                .child(nav_placeholder(t, "Today", "4 left"))
+                .child(
+                    nav_placeholder(t, "Today", "4 left", st.view == View::Today)
+                        .cursor(CursorStyle::PointingHand)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|st, _e, _w, cx| st.show_today(cx)),
+                        ),
+                )
                 .child(
                     div()
                         .pl(px(20.0))
@@ -234,13 +275,13 @@ fn sidebar(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoEle
                         .text_color(t.faint)
                         .child("week   month"),
                 )
-                .child(nav_placeholder(t, "Inbox", "2"))
+                .child(nav_placeholder(t, "Inbox", "2", false))
                 // real notebooks
                 .child(tree)
                 // more placeholders
-                .child(nav_placeholder(t, "Training", "wk 3/4"))
-                .child(nav_placeholder(t, "Travel", "2 trips"))
-                .child(nav_placeholder(t, "Journal", "")),
+                .child(nav_placeholder(t, "Training", "wk 3/4", false))
+                .child(nav_placeholder(t, "Travel", "2 trips", false))
+                .child(nav_placeholder(t, "Journal", "", false)),
         )
         .child(
             div()
@@ -302,6 +343,212 @@ fn links_panel(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
         .child(mentions)
 }
 
+// --- Today planner (static placeholder layout) ------------------------------
+
+fn checkbox(t: &Theme, done: bool) -> Div {
+    if done {
+        div().w(px(15.0)).h(px(15.0)).bg(t.accent)
+    } else {
+        div()
+            .w(px(15.0))
+            .h(px(15.0))
+            .border_1()
+            .border_color(t.faint)
+    }
+}
+
+fn planner_task(t: &Theme, text: &str, done: bool, note: &str) -> Div {
+    let mut lbl = div()
+        .flex_1()
+        .text_color(if done { t.muted } else { t.text })
+        .child(text.to_string());
+    if done {
+        lbl = lbl.line_through();
+    }
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .py(px(5.0))
+        .child(checkbox(t, done))
+        .child(lbl);
+    if !note.is_empty() {
+        row = row.child(div().text_xs().text_color(t.faint).child(note.to_string()));
+    }
+    row
+}
+
+fn planner_habit(t: &Theme, text: &str, done: bool, count: &str, faded: bool) -> Div {
+    let color = if faded {
+        t.faint
+    } else if done {
+        t.muted
+    } else {
+        t.text
+    };
+    let mut lbl = div().flex_1().text_color(color).child(text.to_string());
+    if done {
+        lbl = lbl.line_through();
+    }
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .py(px(5.0))
+        .child(checkbox(t, done))
+        .child(lbl)
+        .child(div().text_xs().text_color(t.faint).child(count.to_string()))
+}
+
+fn week_strip(t: &Theme) -> Div {
+    let days = ["T21", "W22", "T23", "F24", "S25", "S26", "M27"];
+    let logged = [true, true, false, true, true, true, true];
+    let mut row = div().flex().gap(px(18.0));
+    for (i, d) in days.iter().enumerate() {
+        let active = i == days.len() - 1;
+        let mut day_lbl = div()
+            .text_xs()
+            .text_color(if active { t.accent } else { t.muted })
+            .child(d.to_string());
+        if active {
+            day_lbl = day_lbl.font_weight(FontWeight::SEMIBOLD);
+        }
+        let dot = if !logged[i] {
+            t.divider
+        } else if active {
+            t.accent
+        } else {
+            t.faint
+        };
+        row = row.child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(6.0))
+                .child(day_lbl)
+                .child(div().w(px(6.0)).h(px(6.0)).bg(dot)),
+        );
+    }
+    row
+}
+
+fn metrics_line(t: &Theme) -> Div {
+    let pair = |k: &str, v: &str| {
+        div()
+            .flex()
+            .gap(px(5.0))
+            .child(div().text_color(t.text).child(k.to_string()))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.text)
+                    .child(v.to_string()),
+            )
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(20.0))
+        .child(pair("sleep", "7.5h"))
+        .child(pair("mood", "6"))
+        .child(pair("run", "5k"))
+        .child(div().text_color(t.faint).child("log: mood 7"))
+}
+
+fn today_view(t: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .max_w(px(720.0))
+        .child(
+            div()
+                .text_xs()
+                .text_color(t.muted)
+                .child("JOURNAL  /  MON, JUL 27"),
+        )
+        .child(
+            div()
+                .pt(px(6.0))
+                .text_size(px(34.0))
+                .font_weight(FontWeight::EXTRA_BOLD)
+                .text_color(t.text)
+                .child("Today"),
+        )
+        .child(
+            div()
+                .w(px(56.0))
+                .h(px(2.0))
+                .bg(t.accent)
+                .mt(px(6.0))
+                .mb(px(18.0)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .justify_between()
+                .child(week_strip(t))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t.faint)
+                        .child("dots = logged days"),
+                ),
+        )
+        .child(div().pt(px(22.0)).pb(px(8.0)).child(label(t, "Tasks")))
+        .child(planner_task(
+            t,
+            "send draft to Ana",
+            false,
+            "from Project notes",
+        ))
+        .child(planner_task(t, "book dentist", false, ""))
+        .child(planner_task(t, "morning run 5k", true, ""))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .py(px(5.0))
+                .child(
+                    div()
+                        .w(px(15.0))
+                        .h(px(15.0))
+                        .border_1()
+                        .border_color(t.faint),
+                )
+                .child(div().text_color(t.faint).child("add a task…")),
+        )
+        .child(
+            div()
+                .pt(px(2.0))
+                .text_xs()
+                .text_color(t.faint)
+                .child("drag to reorder"),
+        )
+        .child(div().h(px(1.0)).bg(t.divider).mt(px(16.0)).mb(px(16.0)))
+        .child(metrics_line(t))
+        .child(div().pt(px(22.0)).pb(px(8.0)).child(label(t, "Habits")))
+        .child(planner_habit(t, "meds", true, "21d", false))
+        .child(planner_habit(t, "stretch 10 min", false, "6d", false))
+        .child(planner_habit(t, "read 20 pages", false, "skipped 4d", true))
+        .child(
+            div()
+                .pt(px(2.0))
+                .text_xs()
+                .text_color(t.faint)
+                .child("neglected habits fade out instead of nagging"),
+        )
+        .child(
+            div()
+                .pt(px(26.0))
+                .text_color(t.muted)
+                .child("Journal prose flows below — the planner is just the top of today's note."),
+        )
+}
+
 fn content_pane(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoElement {
     let pane = div()
         .flex()
@@ -309,8 +556,11 @@ fn content_pane(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl In
         .flex_1()
         .h_full()
         .bg(t.bg)
-        .px(px(40.0))
-        .pt(px(28.0));
+        .px(px(48.0))
+        .pt(px(32.0));
+    if st.view == View::Today {
+        return pane.child(today_view(t));
+    }
     match (st.selected_note().is_some(), st.editor.clone()) {
         (true, Some(ed)) => {
             let note = st.selected_note().unwrap();
@@ -322,15 +572,23 @@ fn content_pane(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl In
                 .unwrap_or("")
                 .to_uppercase();
             let crumb = format!("{dir}  /  {}", note.title);
+            // Readable left-aligned column (content doesn't span the whole pane).
             pane.child(
                 div()
-                    .text_xs()
-                    .text_color(t.muted)
-                    .pb(px(16.0))
-                    .child(crumb),
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .max_w(px(720.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t.muted)
+                            .pb(px(16.0))
+                            .child(crumb),
+                    )
+                    .child(div().flex_1().child(ed))
+                    .child(links_panel(t, st, cx)),
             )
-            .child(div().flex_1().child(ed))
-            .child(links_panel(t, st, cx))
         }
         _ => pane
             .items_center()
@@ -343,11 +601,9 @@ fn day_rail(t: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .w(px(272.0))
+        .w(px(248.0))
         .h_full()
         .bg(t.surface)
-        .border_l_1()
-        .border_color(t.divider)
         .px(px(16.0))
         .pt(px(16.0))
         .child(
@@ -408,7 +664,7 @@ fn footer_bar(t: &Theme, word_count: usize) -> impl IntoElement {
         .flex()
         .items_center()
         .justify_between()
-        .h(px(30.0))
+        .h(px(32.0))
         .px(px(16.0))
         .bg(t.bg)
         .border_t_1()
@@ -436,6 +692,7 @@ impl Render for AppState {
             .map(|ed| ed.read(cx).text().split_whitespace().count())
             .unwrap_or(0);
         let palette_open = self.palette.open;
+        let dark = self.is_dark();
 
         let mut root = div()
             .flex()
@@ -480,14 +737,16 @@ impl Render for AppState {
                 }));
         }
 
-        root.child(toolbar(&t))
+        root.child(toolbar(&t, dark, cx))
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .overflow_hidden()
                     .child(sidebar(&t, self, cx))
+                    .child(vdivider(&t))
                     .child(content_pane(&t, self, cx))
+                    .child(vdivider(&t))
                     .child(day_rail(&t)),
             )
             .child(footer_bar(&t, word_count))
@@ -545,10 +804,19 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
             return;
         }
     };
-    let theme = Theme::light();
+    let theme = if config.theme == "dark" {
+        Theme::dark()
+    } else {
+        Theme::light()
+    };
     let text_color = theme.text;
     let index = silo_index::Index::open_or_build(&vault_path, &vault).ok();
     let selected: Option<NoteId> = config.last_note.as_deref().and_then(|s| s.parse().ok());
+    let view = if selected.is_some() {
+        View::Note
+    } else {
+        View::Today
+    };
     let initial_body = selected
         .and_then(|id| find_note_body(&vault, id))
         .unwrap_or_default();
@@ -597,6 +865,7 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
                     vault,
                     selected,
                     theme,
+                    view,
                     editor: Some(editor),
                     save_task: None,
                     _save_sub: Some(sub),

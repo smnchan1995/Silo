@@ -35,17 +35,16 @@ impl Theme {
         }
     }
 
-    /// Dark variant — wired to a theme toggle in a later milestone.
-    #[allow(dead_code)]
+    /// Dark variant. Accent softens to a coral (per the dark mockup).
     pub fn dark() -> Self {
         Self {
-            bg: rgb(0x1a1918),
-            surface: rgb(0x232120),
-            text: rgb(0xf2efee),
-            muted: rgb(0x9b9797),
-            faint: rgb(0x605d5d),
-            divider: rgb(0x33302f),
-            accent: rgb(0xff563c),
+            bg: rgb(0x1e1d1b),
+            surface: rgb(0x191817),
+            text: rgb(0xece9e6),
+            muted: rgb(0x8b8681),
+            faint: rgb(0x565250),
+            divider: rgb(0x322f2c),
+            accent: rgb(0xe08a70),
         }
     }
 }

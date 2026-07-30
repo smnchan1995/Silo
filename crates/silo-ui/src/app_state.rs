@@ -10,10 +10,19 @@ use silo_vault::AppConfig;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Which surface the center pane shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum View {
+    Note,
+    Today,
+}
+
 pub struct AppState {
     pub vault: Notebook,
     pub selected: Option<NoteId>,
     pub theme: Theme,
+    /// Center-pane view (a note, or the Today planner).
+    pub view: View,
     /// The body editor for the selected note. `None` in unit tests (no GPUI app).
     pub editor: Option<Entity<NoteEditor>>,
     /// Pending debounced autosave; replacing it cancels the previous timer.
@@ -45,8 +54,32 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    pub fn is_dark(&self) -> bool {
+        self.config.theme == "dark"
+    }
+
+    /// Switch the center pane to the Today planner.
+    pub fn show_today(&mut self, cx: &mut Context<Self>) {
+        self.view = View::Today;
+        cx.notify();
+    }
+
+    /// Flip light/dark, recolor the editor, and persist the choice.
+    pub fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        let dark = !self.is_dark();
+        self.config.theme = if dark { "dark".into() } else { "light".into() };
+        self.theme = if dark { Theme::dark() } else { Theme::light() };
+        if let Some(ed) = self.editor.clone() {
+            let c = self.theme.text;
+            ed.update(cx, |e, cx| e.set_text_color(c, cx));
+        }
+        let _ = silo_vault::save_config(&self.config_path, &self.config);
+        cx.notify();
+    }
+
     /// Open a note by id: load its body into the editor, focus it, persist last_note.
     pub fn open_note(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
+        self.view = View::Note;
         self.selected = Some(id);
         let body = self
             .selected_note()
@@ -343,6 +376,7 @@ mod tests {
             vault: root,
             selected: None,
             theme: Theme::light(),
+            view: View::Note,
             editor: None,
             save_task: None,
             _save_sub: None,
@@ -372,6 +406,7 @@ mod tests {
             vault: root,
             selected: Some(id),
             theme: Theme::light(),
+            view: View::Note,
             editor: None,
             save_task: None,
             _save_sub: None,
