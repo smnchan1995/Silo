@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # macOS is required: silo-ui builds on GPUI, which compiles Metal shaders.
+    name: fmt · clippy · test · build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add rustfmt + clippy
+        run: rustup component add rustfmt clippy
+
+      # Recent Xcode ships the Metal toolchain as a separate component; GPUI's
+      # shader build needs it. No-op if already present.
+      - name: Ensure Metal toolchain
+        run: sudo xcodebuild -downloadComponent MetalToolchain || true
+
+      # Caches ~/.cargo and target/ (incl. the GPUI git dependency) so runs
+      # after the first are fast.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build app
+        run: cargo build -p silo
