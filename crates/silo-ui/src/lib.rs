@@ -1,3 +1,4 @@
+use chrono::Datelike;
 use gpui::{
     div, ease_out_quint, img, linear_color_stop, linear_gradient, point, prelude::*, px, size,
     Animation, AnimationExt, App, Bounds, Context, CursorStyle, Div, Entity, FontWeight,
@@ -13,6 +14,7 @@ use std::time::Duration;
 mod app_state;
 mod editor;
 mod palette;
+mod planner;
 mod theme;
 mod travel;
 
@@ -537,7 +539,15 @@ fn sidebar(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> impl IntoEle
                             cx.listener(|st, _e, _w, cx| st.set_view(View::Travel, cx)),
                         ),
                 )
-                .child(nav_placeholder(t, "Journal", "", false)),
+                .child(
+                    nav_placeholder(t, "Journal", "", st.view == View::Journal)
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(|s| s.bg(t.hover))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|st, _e, _w, cx| st.set_view(View::Journal, cx)),
+                        ),
+                ),
         )
         .child(
             div()
@@ -615,196 +625,103 @@ fn checkbox(t: &Theme, done: bool) -> Div {
     }
 }
 
-fn planner_task(t: &Theme, text: &str, done: bool, note: &str) -> Div {
+/// A task row: click the checkbox or label to toggle done; hover reveals × to
+/// delete. Shared by Today / Week / Month.
+fn task_line(t: &Theme, task: &planner::Task, cx: &mut Context<AppState>) -> Div {
+    let id = task.id;
+    let group: SharedString = format!("task-{id}").into();
     let mut lbl = div()
         .flex_1()
-        .text_color(if done { t.muted } else { t.text })
-        .child(text.to_string());
-    if done {
-        lbl = lbl.line_through();
-    }
-    let mut row = div()
-        .flex()
-        .items_center()
-        .gap(px(10.0))
-        .py(px(5.0))
-        .child(checkbox(t, done))
-        .child(lbl);
-    if !note.is_empty() {
-        row = row.child(div().text_xs().text_color(t.faint).child(note.to_string()));
-    }
-    row
-}
-
-fn planner_habit(t: &Theme, text: &str, done: bool, count: &str, faded: bool) -> Div {
-    let color = if faded {
-        t.faint
-    } else if done {
-        t.muted
-    } else {
-        t.text
-    };
-    let mut lbl = div().flex_1().text_color(color).child(text.to_string());
-    if done {
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_color(if task.done { t.muted } else { t.text })
+        .child(task.text.clone());
+    if task.done {
         lbl = lbl.line_through();
     }
     div()
+        .group(group.clone())
+        .relative()
         .flex()
         .items_center()
         .gap(px(10.0))
-        .py(px(5.0))
-        .child(checkbox(t, done))
+        .py(px(4.0))
+        .pr(px(16.0))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|s| s.bg(t.hover))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |st, _e, _w, cx| st.toggle_task(id, cx)),
+        )
+        .child(checkbox(t, task.done))
         .child(lbl)
-        .child(div().text_xs().text_color(t.faint).child(count.to_string()))
-}
-
-fn week_strip(t: &Theme) -> Div {
-    let days = ["T21", "W22", "T23", "F24", "S25", "S26", "M27"];
-    let logged = [true, true, false, true, true, true, true];
-    let mut row = div().flex().gap(px(18.0));
-    for (i, d) in days.iter().enumerate() {
-        let active = i == days.len() - 1;
-        let mut day_lbl = div()
-            .text_xs()
-            .text_color(if active { t.accent } else { t.muted })
-            .child(d.to_string());
-        if active {
-            day_lbl = day_lbl.font_weight(FontWeight::SEMIBOLD);
-        }
-        let dot = if !logged[i] {
-            t.divider
-        } else if active {
-            t.accent
-        } else {
-            t.faint
-        };
-        row = row.child(
+        .child(
             div()
+                .absolute()
+                .right(px(2.0))
+                .top_0()
+                .bottom_0()
                 .flex()
-                .flex_col()
                 .items_center()
-                .gap(px(6.0))
-                .child(day_lbl)
-                .child(div().w(px(6.0)).h(px(6.0)).bg(dot)),
-        );
-    }
-    row
-}
-
-fn metrics_line(t: &Theme) -> Div {
-    let pair = |k: &str, v: &str| {
-        div()
-            .flex()
-            .gap(px(5.0))
-            .child(div().text_color(t.text).child(k.to_string()))
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(t.text)
-                    .child(v.to_string()),
-            )
-    };
-    div()
-        .flex()
-        .items_center()
-        .gap(px(20.0))
-        .child(pair("sleep", "7.5h"))
-        .child(pair("mood", "6"))
-        .child(pair("run", "5k"))
-        .child(div().text_color(t.faint).child("log: mood 7"))
-}
-
-fn today_view(t: &Theme) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .max_w(px(720.0))
-        .child(
-            div()
-                .text_xs()
-                .text_color(t.muted)
-                .child("JOURNAL  /  MON, JUL 27"),
-        )
-        .child(
-            div()
-                .pt(px(6.0))
-                .text_size(px(34.0))
-                .font_weight(FontWeight::EXTRA_BOLD)
-                .text_color(t.text)
-                .child("Today"),
-        )
-        .child(
-            div()
-                .w(px(56.0))
-                .h(px(2.0))
-                .bg(t.accent)
-                .mt(px(6.0))
-                .mb(px(18.0)),
-        )
-        .child(
-            div()
-                .flex()
-                .items_start()
-                .justify_between()
-                .child(week_strip(t))
+                .invisible()
+                .group_hover(group, |s| s.visible())
                 .child(
                     div()
                         .text_xs()
                         .text_color(t.faint)
-                        .child("dots = logged days"),
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(|s| s.text_color(t.accent))
+                        .child("×")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |st, _e, _w, cx| st.delete_task(id, cx)),
+                        ),
                 ),
         )
-        .child(div().pt(px(22.0)).pb(px(8.0)).child(label(t, "Tasks")))
-        .child(planner_task(
+}
+
+/// The "add a task…" affordance for a given day (opens the naming prompt).
+fn add_task_line(t: &Theme, date: chrono::NaiveDate, cx: &mut Context<AppState>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .py(px(4.0))
+        .cursor(CursorStyle::PointingHand)
+        .text_color(t.faint)
+        .hover(|s| s.text_color(t.accent))
+        .child(
+            div()
+                .w(px(15.0))
+                .h(px(15.0))
+                .border_1()
+                .border_color(t.faint),
+        )
+        .child(div().child("add a task…"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |st, _e, window, cx| st.begin_add_task(date, window, cx)),
+        )
+}
+
+fn today_view(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
+    let today = st.today;
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .max_w(px(720.0))
+        .child(view_header(
             t,
-            "send draft to Ana",
-            false,
-            "from Project notes",
+            &format!("Planner / {}", planner::day_title(today)),
+            "Today",
+            "",
         ))
-        .child(planner_task(t, "book dentist", false, ""))
-        .child(planner_task(t, "morning run 5k", true, ""))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .py(px(5.0))
-                .child(
-                    div()
-                        .w(px(15.0))
-                        .h(px(15.0))
-                        .border_1()
-                        .border_color(t.faint),
-                )
-                .child(div().text_color(t.faint).child("add a task…")),
-        )
-        .child(
-            div()
-                .pt(px(2.0))
-                .text_xs()
-                .text_color(t.faint)
-                .child("drag to reorder"),
-        )
-        .child(div().h(px(1.0)).bg(t.divider).mt(px(16.0)).mb(px(16.0)))
-        .child(metrics_line(t))
-        .child(div().pt(px(22.0)).pb(px(8.0)).child(label(t, "Habits")))
-        .child(planner_habit(t, "meds", true, "21d", false))
-        .child(planner_habit(t, "stretch 10 min", false, "6d", false))
-        .child(planner_habit(t, "read 20 pages", false, "skipped 4d", true))
-        .child(
-            div()
-                .pt(px(2.0))
-                .text_xs()
-                .text_color(t.faint)
-                .child("neglected habits fade out instead of nagging"),
-        )
-        .child(
-            div()
-                .pt(px(26.0))
-                .text_color(t.muted)
-                .child("Journal prose flows below — the planner is just the top of today's note."),
-        )
+        .child(div().pt(px(20.0)).pb(px(6.0)).child(label(t, "Tasks")));
+    for task in st.tasks_on(today) {
+        col = col.child(task_line(t, task, cx));
+    }
+    col.child(add_task_line(t, today, cx))
 }
 
 /// The heading block shared by planner views: breadcrumb, title + accent
@@ -836,72 +753,52 @@ fn view_header(t: &Theme, crumb: &str, title: &str, right: &str) -> Div {
     head
 }
 
-fn week_task(t: &Theme, text: &str, done: bool) -> Div {
-    let mut lbl = div()
-        .text_sm()
-        .text_color(if done { t.muted } else { t.text })
-        .child(text.to_string());
-    if done {
-        lbl = lbl.line_through();
-    }
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .py(px(3.0))
-        .child(checkbox(t, done))
-        .child(lbl)
-}
-
-#[allow(clippy::type_complexity)]
-fn week_view(t: &Theme) -> Div {
-    let days: [(&str, &[(&str, bool)], &str); 7] = [
-        (
-            "Mon 27",
-            &[
-                ("send draft to…", false),
-                ("book dentist", false),
-                ("morning run…", true),
-            ],
-            "sleep 7.5h · mood 6",
-        ),
-        ("Tue 28", &[("review Kyoto…", false)], "—"),
-        ("Wed 29", &[("weekly review", false)], "—"),
-        ("Thu 30", &[], "—"),
-        ("Fri 31", &[("ship draft", false)], "—"),
-        ("Sat 1", &[], "—"),
-        ("Sun 2", &[], "—"),
-    ];
+fn week_view(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
+    let week = planner::week_of(st.today);
+    let range = format!(
+        "{} — {}",
+        planner::day_title(week[0]),
+        planner::day_title(week[6])
+    );
     let mut cols = div()
         .flex()
         .flex_1()
         .border_t_1()
         .border_color(t.divider)
         .mt(px(18.0));
-    for (i, (hdr, tasks, foot)) in days.iter().enumerate() {
-        let active = i == 0;
-        let mut col = div().flex().flex_col().flex_1().pt(px(10.0)).px(px(10.0));
+    for (i, day) in week.iter().enumerate() {
+        let is_today = *day == st.today;
+        let mut col = div().flex().flex_col().flex_1().pt(px(10.0)).px(px(8.0));
         if i > 0 {
             col = col.border_l_1().border_color(t.divider);
         }
         let mut hd = div()
             .text_xs()
             .pb(px(8.0))
-            .text_color(if active { t.accent } else { t.muted })
-            .child(hdr.to_uppercase());
-        if active {
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_color(if is_today { t.accent } else { t.muted })
+            .child(planner::day_title(*day).to_uppercase());
+        if is_today {
             hd = hd.font_weight(FontWeight::SEMIBOLD);
         }
         col = col.child(hd);
-        for (task, done) in tasks.iter() {
-            col = col.child(week_task(t, task, *done));
+        for task in st.tasks_on(*day) {
+            col = col.child(task_line(t, task, cx));
         }
+        let day = *day;
         col = col.child(div().flex_1()).child(
             div()
-                .pt(px(8.0))
+                .pt(px(6.0))
                 .text_xs()
                 .text_color(t.faint)
-                .child(foot.to_string()),
+                .cursor(CursorStyle::PointingHand)
+                .hover(|s| s.text_color(t.accent))
+                .child("＋")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |st, _e, window, cx| st.begin_add_task(day, window, cx)),
+                ),
         );
         cols = cols.child(col);
     }
@@ -909,84 +806,225 @@ fn week_view(t: &Theme) -> Div {
         .flex()
         .flex_col()
         .flex_1()
-        .child(view_header(
-            t,
-            "Journal / Week",
-            "This week",
-            "Jul 27 — Aug 2",
-        ))
+        .child(view_header(t, "Planner / Week", "This week", &range))
         .child(cols)
 }
 
-fn month_view(t: &Theme) -> Div {
-    let weekdays = ["M", "T", "W", "T", "F", "S", "S"];
-    // July 2026 grid: two leading blanks (starts Wed), 1..=31, trailing blanks.
-    let mut days: Vec<Option<u32>> = vec![None, None];
-    for d in 1..=31u32 {
-        days.push(Some(d));
-    }
-    while !days.len().is_multiple_of(7) {
-        days.push(None);
-    }
+fn month_view(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
+    let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let grid = planner::month_grid(st.planner_day);
 
     let mut header = div().flex().pb(px(6.0));
     for w in weekdays {
         header = header.child(div().flex_1().text_xs().text_color(t.muted).child(w));
     }
 
-    let mut grid = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .border_t_1()
-        .border_color(t.text);
-    for week in days.chunks(7) {
-        let mut row = div().flex().flex_1();
+    let mut cal = div().flex().flex_col().border_t_1().border_color(t.text);
+    for week in &grid {
+        let mut row = div().flex().h(px(64.0));
         for cell in week {
             let mut c = div()
                 .flex()
                 .flex_col()
                 .flex_1()
-                .pt(px(8.0))
+                .pt(px(6.0))
+                .px(px(6.0))
                 .border_b_1()
                 .border_color(t.divider);
-            if let Some(d) = cell {
-                let today = *d == 27;
+            if let Some(day) = cell {
+                let day = *day;
+                let is_today = day == st.today;
+                let selected = day == st.planner_day;
                 let mut num = div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(t.text)
-                    .child(d.to_string());
-                if today {
-                    num = num.px(px(5.0)).py(px(1.0)).bg(t.accent).text_color(t.bg);
+                    .text_color(if is_today { t.bg } else { t.text })
+                    .child(day.day().to_string());
+                if is_today {
+                    num = num.px(px(5.0)).py(px(1.0)).bg(t.accent);
                 }
-                // logged dots (static pattern)
-                let dots = d.is_multiple_of(3) as usize + d.is_multiple_of(4) as usize + 1;
-                let mut dotrow = div().flex().gap(px(3.0)).pt(px(6.0));
-                for _ in 0..dots.min(3) {
-                    dotrow = dotrow.child(div().w(px(5.0)).h(px(5.0)).bg(t.faint));
+                // one dot per task on the day (up to 4).
+                let n = st.tasks_on(day).len().min(4);
+                let mut dots = div().flex().gap(px(3.0)).pt(px(6.0));
+                for _ in 0..n {
+                    dots = dots.child(div().w(px(5.0)).h(px(5.0)).bg(t.faint));
                 }
-                c = c.child(div().flex().child(num)).child(dotrow);
+                c = c
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(|s| s.bg(t.hover))
+                    .when(selected, |d| d.bg(t.surface))
+                    .child(div().flex().child(num))
+                    .child(dots)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |st, _e, _w, cx| st.select_day(day, cx)),
+                    );
             }
             row = row.child(c);
         }
-        grid = grid.child(row);
+        cal = cal.child(row);
+    }
+
+    // Selected day's tasks, with CRUD.
+    let sel = st.planner_day;
+    let mut day_panel = div()
+        .flex()
+        .flex_col()
+        .pt(px(14.0))
+        .child(label(t, &planner::day_title(sel)).pb(px(4.0)));
+    for task in st.tasks_on(sel) {
+        day_panel = day_panel.child(task_line(t, task, cx));
+    }
+    day_panel = day_panel.child(add_task_line(t, sel, cx));
+
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .child(view_header(
+            t,
+            "Planner / Month",
+            &planner::month_title(st.planner_day),
+            "",
+        ))
+        .child(div().pt(px(18.0)).child(header))
+        .child(cal)
+        .child(day_panel)
+}
+
+/// The text-entry prompt overlay (e.g. naming a new task), rendered on top.
+fn render_prompt(t: &Theme, st: &AppState) -> Option<gpui::AnyElement> {
+    if !st.prompt_open {
+        return None;
+    }
+    let body = if st.prompt_text.is_empty() {
+        div().text_color(t.faint).child("Type a name…")
+    } else {
+        div()
+            .text_color(t.text)
+            .child(format!("{}\u{258f}", st.prompt_text))
+    };
+    let card = div()
+        .w(px(440.0))
+        .bg(t.bg)
+        .border_1()
+        .border_color(t.divider)
+        .shadow_lg()
+        .child(
+            div()
+                .px(px(14.0))
+                .py(px(10.0))
+                .border_b_1()
+                .border_color(t.divider)
+                .child(label(t, &st.prompt_title)),
+        )
+        .child(div().px(px(14.0)).py(px(12.0)).child(body))
+        .child(
+            div()
+                .px(px(14.0))
+                .pb(px(10.0))
+                .text_xs()
+                .text_color(t.faint)
+                .child("↩ add · esc cancel"),
+        );
+    let backdrop = div()
+        .absolute()
+        .size_full()
+        .flex()
+        .justify_center()
+        .pt(px(140.0))
+        .bg(gpui::rgba(0x00000026))
+        .child(card);
+    Some(gpui::deferred(backdrop).into_any_element())
+}
+
+/// Journal: dated entries are real notes on disk; full CRUD via the note system.
+fn journal_view(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
+    let entries = st.journal_entries();
+    let new_btn = div()
+        .text_xs()
+        .text_color(t.accent)
+        .cursor(CursorStyle::PointingHand)
+        .hover(|s| s.underline())
+        .child("＋ New entry")
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|st, _e, window, cx| st.new_journal(window, cx)),
+        );
+
+    let mut list = div().flex().flex_col().gap(px(1.0)).mt(px(16.0));
+    if entries.is_empty() {
+        list = list.child(
+            div()
+                .text_sm()
+                .text_color(t.faint)
+                .child("No entries yet — “＋ New entry” starts today's journal."),
+        );
+    }
+    for note in entries {
+        let id = note.id;
+        let group: SharedString = format!("jr-{id}").into();
+        let path = note.path.clone();
+        let cdir = silo_vault::children_dir(&note.path);
+        list = list.child(
+            div()
+                .group(group.clone())
+                .relative()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .py(px(6.0))
+                .pr(px(18.0))
+                .border_b_1()
+                .border_color(t.divider)
+                .hover(|s| s.bg(t.hover))
+                .child(
+                    div()
+                        .flex_1()
+                        .cursor(CursorStyle::PointingHand)
+                        .text_color(t.text)
+                        .child(note.title.clone())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |st, _e, window, cx| st.open_note(id, window, cx)),
+                        ),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(2.0))
+                        .top_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .invisible()
+                        .group_hover(group, |s| s.visible())
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t.faint)
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|s| s.text_color(t.accent))
+                                .child("×")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |st, _e, _w, cx| {
+                                        st.delete_node(path.clone(), cdir.clone(), cx)
+                                    }),
+                                ),
+                        ),
+                ),
+        );
     }
 
     div()
         .flex()
         .flex_col()
         .flex_1()
-        .child(view_header(t, "Journal / Month", "July 2026", ""))
-        .child(div().pt(px(18.0)).child(header))
-        .child(grid)
-        .child(
-            div()
-                .pt(px(10.0))
-                .text_xs()
-                .text_color(t.faint)
-                .child("ink: gray = logged, red = today — click a day to open its note"),
-        )
+        .max_w(px(720.0))
+        .child(view_header(t, "Journal", "Journal", ""))
+        .child(new_btn)
+        .child(list)
 }
 
 fn training_view(t: &Theme) -> Div {
@@ -1715,11 +1753,12 @@ fn content_pane(t: &Theme, st: &AppState, cx: &mut Context<AppState>) -> Div {
         .px(px(48.0))
         .pt(px(32.0));
     match st.view {
-        View::Today => return pane.child(today_view(t)),
-        View::Week => return pane.child(week_view(t)),
-        View::Month => return pane.child(month_view(t)),
+        View::Today => return pane.child(today_view(t, st, cx)),
+        View::Week => return pane.child(week_view(t, st, cx)),
+        View::Month => return pane.child(month_view(t, st, cx)),
         View::Training => return pane.child(training_view(t)),
         View::Travel => return pane.child(travel_view(t, st, cx)),
+        View::Journal => return pane.child(journal_view(t, st, cx)),
         View::Note => {}
     }
     match (st.selected_note().is_some(), st.editor.clone()) {
@@ -1893,30 +1932,49 @@ impl Render for AppState {
                 .on_action(cx.listener(AppState::palette_up))
                 .on_action(cx.listener(AppState::palette_down))
                 .on_action(cx.listener(AppState::palette_confirm))
-                .on_action(cx.listener(AppState::palette_close))
-                .on_key_down(cx.listener(|st, ev: &KeyDownEvent, _w, cx| {
-                    if !st.palette.open {
-                        return;
-                    }
-                    let ks = &ev.keystroke;
-                    if ks.key == "backspace" {
-                        st.palette.query.pop();
-                        st.palette.selected = 0;
-                        cx.notify();
-                        return;
-                    }
-                    // single-character keys only (skip named keys like enter/up)
-                    if ks.key.chars().count() == 1
-                        && !ks.modifiers.platform
-                        && !ks.modifiers.control
-                    {
-                        if let Some(c) = ks.key_char.as_ref() {
-                            st.palette.query.push_str(c);
-                            st.palette.selected = 0;
-                            cx.notify();
+                .on_action(cx.listener(AppState::palette_close));
+        }
+        // Key capture for the palette query and the text prompt (naming a task).
+        if palette_open || self.prompt_open {
+            root = root.on_key_down(cx.listener(|st, ev: &KeyDownEvent, window, cx| {
+                let ks = &ev.keystroke;
+                // Text prompt (e.g. naming a task) captures keys first.
+                if st.prompt_open {
+                    match ks.key.as_str() {
+                        "enter" => st.prompt_confirm(window, cx),
+                        "escape" => st.prompt_cancel(window, cx),
+                        "backspace" => st.prompt_backspace(cx),
+                        _ => {
+                            if ks.key.chars().count() == 1
+                                && !ks.modifiers.platform
+                                && !ks.modifiers.control
+                            {
+                                if let Some(c) = ks.key_char.as_ref() {
+                                    st.prompt_push(c, cx);
+                                }
+                            }
                         }
                     }
-                }));
+                    return;
+                }
+                if !st.palette.open {
+                    return;
+                }
+                if ks.key == "backspace" {
+                    st.palette.query.pop();
+                    st.palette.selected = 0;
+                    cx.notify();
+                    return;
+                }
+                // single-character keys only (skip named keys like enter/up)
+                if ks.key.chars().count() == 1 && !ks.modifiers.platform && !ks.modifiers.control {
+                    if let Some(c) = ks.key_char.as_ref() {
+                        st.palette.query.push_str(c);
+                        st.palette.selected = 0;
+                        cx.notify();
+                    }
+                }
+            }));
         }
 
         root.child(titlebar(&t, dark, cx))
@@ -1931,6 +1989,7 @@ impl Render for AppState {
             )
             .child(footer_bar(&t, word_count))
             .children(palette::render(&t, self))
+            .children(render_prompt(&t, self))
     }
 }
 
@@ -1999,6 +2058,7 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
     let initial_body = selected
         .and_then(|id| find_note_body(&vault, id))
         .unwrap_or_default();
+    let today = chrono::Local::now().date_naive();
     let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
     cx.open_window(
         WindowOptions {
@@ -2081,6 +2141,19 @@ fn open_main_window(cx: &mut App, config_path: PathBuf, config: AppConfig, vault
                         .filter(|k| !k.trim().is_empty()),
                     map_inflight: std::collections::HashSet::new(),
                     collapsed: std::collections::HashSet::new(),
+                    today,
+                    planner_day: today,
+                    tasks: planner::initial_tasks(today),
+                    next_task_id: planner::initial_tasks(today)
+                        .iter()
+                        .map(|t| t.id)
+                        .max()
+                        .unwrap_or(0)
+                        + 1,
+                    prompt_open: false,
+                    prompt_title: String::new(),
+                    prompt_text: String::new(),
+                    prompt_date: None,
                 }
             })
         },

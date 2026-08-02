@@ -4958,6 +4958,7 @@ name = "silo-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui",
  "gpui_platform",
  "silo-core",

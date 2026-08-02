@@ -3,8 +3,10 @@ use crate::palette::{
     PaletteClose, PaletteConfirm, PaletteDown, PaletteState, PaletteUp, TogglePalette, COMMANDS,
     LIMIT,
 };
+use crate::planner;
 use crate::theme::Theme;
 use crate::travel;
+use chrono::NaiveDate;
 use gpui::{Context, Entity, FocusHandle, Subscription, Task, Window};
 use silo_core::{Note, NoteId, Notebook};
 use silo_vault::AppConfig;
@@ -21,6 +23,7 @@ pub enum View {
     Month,
     Training,
     Travel,
+    Journal,
 }
 
 /// How the Travel view presents a trip.
@@ -99,6 +102,20 @@ pub struct AppState {
     pub map_inflight: HashSet<PathBuf>,
     /// Sidebar tree nodes the user has collapsed (everything else is expanded).
     pub collapsed: HashSet<NoteId>,
+    /// Today's date, captured at launch (drives the planner views).
+    pub today: NaiveDate,
+    /// The day the Month/Today views focus on (click a day to change it).
+    pub planner_day: NaiveDate,
+    /// Planner tasks (owned, editable) shared by Today/Week/Month.
+    pub tasks: Vec<planner::Task>,
+    /// Next task id to hand out.
+    pub next_task_id: u64,
+    /// A lightweight text prompt (e.g. naming a new task); reuses the palette's
+    /// keystroke capture. `open` gates it; `date` is the task's day when adding.
+    pub prompt_open: bool,
+    pub prompt_title: String,
+    pub prompt_text: String,
+    pub prompt_date: Option<NaiveDate>,
 }
 
 impl AppState {
@@ -331,6 +348,118 @@ impl AppState {
         {
             day.stops.retain(|s| s.id != event_id);
             cx.notify();
+        }
+    }
+
+    // --- Planner tasks (Today / Week / Month) -----------------------------
+
+    /// Tasks on a given day, undone first then by id.
+    pub fn tasks_on(&self, date: NaiveDate) -> Vec<&planner::Task> {
+        let mut v: Vec<&planner::Task> = self.tasks.iter().filter(|t| t.date == date).collect();
+        v.sort_by_key(|t| (t.done, t.id));
+        v
+    }
+
+    /// Focus the planner on a day (Month → click a day).
+    pub fn select_day(&mut self, date: NaiveDate, cx: &mut Context<Self>) {
+        self.planner_day = date;
+        cx.notify();
+    }
+
+    pub fn toggle_task(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+            t.done = !t.done;
+            cx.notify();
+        }
+    }
+
+    pub fn delete_task(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.tasks.retain(|t| t.id != id);
+        cx.notify();
+    }
+
+    // --- Text prompt (name a new task) ------------------------------------
+
+    /// Open the prompt to add a task on `date`.
+    pub fn begin_add_task(&mut self, date: NaiveDate, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_open = true;
+        self.prompt_title = "New task".into();
+        self.prompt_text.clear();
+        self.prompt_date = Some(date);
+        if let Some(h) = &self.focus_handle {
+            window.focus(h, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn prompt_push(&mut self, s: &str, cx: &mut Context<Self>) {
+        self.prompt_text.push_str(s);
+        cx.notify();
+    }
+
+    pub fn prompt_backspace(&mut self, cx: &mut Context<Self>) {
+        self.prompt_text.pop();
+        cx.notify();
+    }
+
+    pub fn prompt_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_open = false;
+        self.prompt_text.clear();
+        self.prompt_date = None;
+        if let Some(ed) = self.editor.clone() {
+            cx.focus_view(&ed, window);
+        }
+        cx.notify();
+    }
+
+    /// Confirm the prompt: create the task (if non-empty) on the pending day.
+    pub fn prompt_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.prompt_text.trim().to_string();
+        if let (false, Some(date)) = (text.is_empty(), self.prompt_date) {
+            let id = self.next_task_id;
+            self.next_task_id += 1;
+            self.tasks.push(planner::Task {
+                id,
+                date,
+                text,
+                done: false,
+            });
+        }
+        self.prompt_cancel(window, cx);
+    }
+
+    // --- Journal (entries are dated notes on disk) ------------------------
+
+    /// The `Journal` folder in the vault (where dated entries live).
+    fn journal_dir(&self) -> PathBuf {
+        self.vault.path.join("Journal")
+    }
+
+    /// Journal entry notes, newest first (by title, which is the date).
+    pub fn journal_entries(&self) -> Vec<&Note> {
+        let Some(folder) = self.vault.children.iter().find(|c| c.name == "Journal") else {
+            return vec![];
+        };
+        let mut entries: Vec<&Note> = folder
+            .children
+            .iter()
+            .filter(|n| !n.is_virtual)
+            .filter_map(|n| n.note.as_ref())
+            .collect();
+        entries.sort_by(|a, b| b.title.cmp(&a.title));
+        entries
+    }
+
+    /// Create today's journal entry (a dated note) and open it.
+    pub fn new_journal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.today.format("%Y-%m-%d").to_string();
+        match silo_vault::create_note(&self.journal_dir(), &title) {
+            Ok(note) => {
+                let id = note.id;
+                self.refresh_vault();
+                self.open_note(id, window, cx);
+            }
+            Err(e) => eprintln!("new journal entry failed: {e}"),
         }
     }
 
@@ -737,6 +866,14 @@ mod tests {
             maps_key: None,
             map_inflight: HashSet::new(),
             collapsed: HashSet::new(),
+            today: NaiveDate::from_ymd_opt(2026, 8, 2).unwrap(),
+            planner_day: NaiveDate::from_ymd_opt(2026, 8, 2).unwrap(),
+            tasks: Vec::new(),
+            next_task_id: 1,
+            prompt_open: false,
+            prompt_title: String::new(),
+            prompt_text: String::new(),
+            prompt_date: None,
         };
         let titles: Vec<_> = st
             .vault
@@ -787,6 +924,14 @@ mod tests {
             maps_key: None,
             map_inflight: HashSet::new(),
             collapsed: HashSet::new(),
+            today: NaiveDate::from_ymd_opt(2026, 8, 2).unwrap(),
+            planner_day: NaiveDate::from_ymd_opt(2026, 8, 2).unwrap(),
+            tasks: Vec::new(),
+            next_task_id: 1,
+            prompt_open: false,
+            prompt_title: String::new(),
+            prompt_text: String::new(),
+            prompt_date: None,
         };
         assert_eq!(st.selected_note().unwrap().title, "A");
     }
